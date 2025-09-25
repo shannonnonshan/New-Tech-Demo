@@ -1,0 +1,343 @@
+body {
+  margin: 0;
+  font-family: 'Poppins', sans-serif;
+  background: #f5f2ef;
+}
+
+.container {
+  display: flex;
+  height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: 80px;
+  background: #fff;
+  padding: 20px 0;
+}
+
+.nav-icons {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  width: 100%;
+}
+
+.nav-icons button {
+  background: none;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: #333;
+  transition: color 0.2s;
+}
+
+.nav-icons button:hover {
+  color: #ff6600;
+}
+
+.nav-icons.bottom {
+  margin-top: auto;
+}
+
+/* Main content */
+.main {
+  flex: 2;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.search-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.search-bar input {
+  flex: 1;
+  padding: 12px;
+  border-radius: 25px;
+  border: 1px solid #ddd;
+}
+
+.search-btn {
+  background: linear-gradient(45deg, #f76b1c, #f9d423);
+  border: none;
+  border-radius: 25px;
+  padding: 12px 20px;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.categories {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.categories button {
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: none;
+  background: #eee;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.categories button:hover {
+  background: #f2f2f2;
+}
+
+.categories .active {
+  background: #f9d423;
+}
+
+/* Book grid */
+.book-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 20px;
+  padding: 10px;
+}
+
+/* Card */
+.book-card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  padding: 15px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.book-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.book-card img {
+  width: 100%;
+  height: 250px;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-bottom: 5px;
+}
+
+.price {
+  display: block;
+  color: #f76b1c;
+  font-weight: bold;
+}
+
+/* Recommended scroll row */
+.recommended {
+  margin-top: 30px;
+}
+
+.scroll-row {
+  display: flex;
+  gap: 15px;
+  overflow-x: auto;
+  padding: 10px 0;
+  scrollbar-width: thin;
+}
+
+.scroll-row::-webkit-scrollbar {
+  height: 8px;
+}
+
+.scroll-row::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 4px;
+}
+
+.thumb-card {
+  flex: 0 0 auto;
+  width: 120px;
+  height: 180px;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.thumb-card:hover {
+  transform: scale(1.05);
+}
+
+.thumb-card img {
+  width: 120px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* Book Modal */
+/* Modal nền */
+.modal {
+  display: none; /* mặc định ẩn */
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.6);
+  justify-content: center;
+  align-items: center;
+}
+
+/* Nội dung modal */
+.modal-content {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  width: 400px;        /* 👈 cố định khung */
+  min-height: 300px;   /* 👈 đảm bảo không quá nhỏ */
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+    position: relative;
+}
+
+/* Nút đóng */
+.modal-content .close {
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.modal-content img {
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+
+.modal-content h3 {
+  margin: 10px 0 5px;
+}
+
+.modal-content p {
+  color: #555;
+  margin-bottom: 10px;
+}
+
+.modal-content span {
+  color: #f76b1c;
+  font-weight: bold;
+}
+
+.close {
+  position: absolute;
+  top: 10px; right: 15px;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+/* Chatbox */
+.chatbox {
+  flex: 1;
+  border-left: 1px solid #eee;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-top-left-radius: 20px;
+}
+
+#chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 10px;
+  padding-right: 5px;
+}
+
+#chat-messages img {
+  max-width: 200px;
+  border-radius: 10px;
+  margin: 8px 0;
+  display: block;
+}
+
+.msg {
+  padding: 10px 14px;
+  border-radius: 15px;
+  margin: 8px 0;
+  max-width: 70%;
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+
+.msg.user {
+  background: #f9d423;
+  color: #333;
+  align-self: flex-end;
+}
+
+.msg.bot {
+  background: #e6eaf5;
+  color: #222;
+  align-self: flex-start;
+}
+
+/* Chat input */
+.chat-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-input input {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 20px;
+  border: 1px solid #ddd;
+  outline: none;
+}
+
+.chat-input button,
+.chat-input label {
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: #fff;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s;
+}
+
+.chat-input button:hover,
+.chat-input label:hover {
+  opacity: 0.8;
+}
+
+/* Icon button colors */
+.upload-btn {
+  background: #6c5ce7; /* tím */
+}
+
+#crop-btn {
+  background: #00b894; /* xanh ngọc */
+}
+
+#send-btn {
+  background: #f76b1c; /* cam */
+}

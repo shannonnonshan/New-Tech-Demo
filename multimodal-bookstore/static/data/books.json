@@ -1,0 +1,98 @@
+[
+  {
+    "id": 1,
+    "title": "1984",
+    "author": "George Orwell",
+    "price": 120000,
+    "cover": "https://covers.openlibrary.org/b/id/7222246-L.jpg",
+    "keywords": ["1984"]
+  },
+  {
+    "id": 2,
+    "title": "Animal Farm",
+    "author": "George Orwell",
+    "price": 90000,
+    "cover": "https://th.bing.com/th/id/OIP.433GFUIPbXW8Vgp3H3obkQHaLd",
+    "keywords": ["animal farm", "animal", "farm"]
+  },
+  {
+    "id": 3,
+    "title": "Harry Potter and the Chamber of Secrets",
+    "author": "J.K. Rowling",
+    "price": 150000,
+    "cover": "https://th.bing.com/th/id/OIP.ZxXAB8FJ5f60aBCKdpTN3wHaLX",
+    "keywords": ["harry potter", "chamber of secrets", "chamber"]
+  },
+  {
+    "id": 4,
+    "title": "The Great Gatsby",
+    "author": "F. Scott Fitzgerald",
+    "price": 100000,
+    "cover": "https://th.bing.com/th/id/OIP.NsMo-l-iKKr7_5pdubUv5wHaLu",
+    "keywords": ["great gatsby", "gatsby"]
+  },
+  {
+    "id": 5,
+    "title": "Fairy Tale",
+    "author": "Stephen King",
+    "price": 180000,
+    "cover": "https://th.bing.com/th/id/OIP.gWlXIE3ZYSgPV-XI4EitywHaHa",
+    "keywords": ["fairy tale", "stephen king"]
+  },
+  {
+    "id": 6,
+    "title": "Never After",
+    "author": "Stephanie Garber",
+    "price": 160000,
+    "cover": "https://tse4.mm.bing.net/th/id/OIP.J2LjP-AKgeE_Y-WfyuCYJAHaK4",
+    "keywords": ["never after", "garber"]
+  },
+  {
+    "id": 7,
+    "title": "Klara and the Sun",
+    "author": "Kazuo Ishiguro",
+    "price": 200000,
+    "cover": "https://th.bing.com/th/id/OIP.mDnWW6ASeaxWZNlixFaBZQHaLQ",
+    "keywords": ["klara and the sun", "ishiguro"]
+  },
+  {
+    "id": 8,
+    "title": "Mist and Fury",
+    "author": "Sarah J. Maas",
+    "price": 170000,
+    "cover": "https://tse4.mm.bing.net/th/id/OIP.S3FAg5M2ZVjORNRQqcgQ6wAAAA",
+    "keywords": ["mist and fury", "maas"]
+  },
+  {
+    "id": 9,
+    "title": "Hamnet",
+    "author": "Maggie O'Farrell",
+    "price": 140000,
+    "cover": "https://th.bing.com/th/id/OIP.TzNGF3mE0YyvTc2vY4EozAAAAA",
+    "keywords": ["hamnet", "o'farrell"]
+  },
+  {
+    "id": 10,
+    "title": "Project Hail Mary",
+    "author": "Andy Weir",
+    "price": 210000,
+    "cover": "https://tse4.mm.bing.net/th/id/OIP.uZLRGDJh6-zQj8_5gJZu2gHaLe",
+    "keywords": ["project hail mary", "andy weir"]
+  },
+  {
+    "id": 11,
+    "title": "The Midnight Library",
+    "author": "Matt Haig",
+    "price": 130000,
+    "cover": "https://m.media-amazon.com/images/I/71aiTCR69YS._AC_UF1000,1000_QL80_.jpg",
+    "keywords": ["midnight library", "matt haig"]
+  },
+  {
+    "id": 12,
+    "title": "The Silent Patient",
+    "author": "Alex Michaelides",
+    "price": 150000,
+    "cover": "https://www.storizen.com/wp-content/uploads/2020/07/The-silent-patient.jpg",
+    "keywords": ["silent patient", "michaelides"]
+  }
+]

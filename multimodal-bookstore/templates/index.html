@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bookstore AI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <nav class="nav-icons top">
+        <button><i class="fa-solid fa-book"></i></button>
+        <button><i class="fa-solid fa-heart"></i></button>
+        <button><i class="fa-solid fa-play"></i></button>
+      </nav>
+      <nav class="nav-icons bottom">
+        <button><i class="fa-solid fa-gear"></i></button>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="search-bar">
+        <input type="text" placeholder="Search for books">
+        <button class="search-btn">Search</button>
+      </div>
+
+      <div class="categories">
+        <button class="active">Popular</button>
+        <button>All</button>
+        <button>eBooks</button>
+        <button>Bestsellers</button>
+        <button>Audiobooks</button>
+        <button>Romance</button>
+        <button>Fantasy</button>
+        <button>Manga</button>
+      </div>
+
+      <!-- Popular -->
+      <section class="popular">
+        <h2>Popular</h2>
+        <div class="book-list">
+          {% for book in books[:6] %}
+          <div class="book-card">
+            <img src="{{ book.cover }}" alt="{{ book.title }}">
+            <h3>{{ book.title }}</h3>
+            <p>{{ book.author }}</p>
+            <span class="price">{{ book.price }} VND</span>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <!-- Recommended -->
+      <section class="recommended">
+        <h2>Recommended for you</h2>
+        <div class="scroll-row" id="recommended-list"></div>
+      </section>
+    </main>
+
+    <!-- Chatbox -->
+    <aside class="chatbox">
+      <h2>Chat</h2>
+      <div id="chat-messages"></div>
+      <!-- Chat input -->
+        <div class="chat-input">
+        <input type="text" id="user-input" placeholder="Write a message...">
+        <!-- Upload file -->
+        <label for="file-upload" class="upload-btn"><i class="fa-solid fa-image"></i></label>
+        <input id="file-upload" type="file" accept="image/*" hidden>
+        <!-- Crop screen -->
+        <button id="crop-btn" type="button"><i class="fa-solid fa-crop"></i></button>
+        <button id="send-btn" type="button"><i class="fa-solid fa-paper-plane"></i></button>
+        </div>
+    </aside>
+  </div>
+
+  <!-- Book Detail Modal -->
+  <div id="book-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeBookModal()">&times;</span>
+      <img id="modal-cover" src="" alt="Book cover" style="max-width:200px;">
+      <h3 id="modal-title"></h3>
+      <p id="modal-author"></p>
+      <span id="modal-price"></span>
+    </div>
+  </div>
+
+  <!-- Screen Crop Overlay -->
+  <div id="screen-crop-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.25); z-index:9999; cursor:crosshair;"></div>
+
+  <!-- Scripts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script>
+const sendBtn = document.getElementById("send-btn");
+const input = document.getElementById("user-input");
+const chat = document.getElementById("chat-messages");
+const fileInput = document.getElementById("file-upload");
+const cropBtn = document.getElementById("crop-btn");
+const overlay = document.getElementById("screen-crop-overlay");
+
+// ------------------------- Chat -------------------------
+function appendMsg(who, content, isHTML=false) {
+  const div = document.createElement("div");
+  div.className = "msg " + who;
+  if(isHTML) div.innerHTML = content;
+  else div.textContent = content;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function sendMessage() {
+  const msg = input.value.trim();
+  if(!msg) return;
+  appendMsg("user", msg);
+  fetch("/api/text-query", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ query: msg })
+  })
+  .then(r => r.json())
+  .then(data => appendMsg("bot", data.reply));
+  input.value = "";
+}
+
+sendBtn.onclick = sendMessage;
+input.addEventListener("keydown", e => { if(e.key==="Enter") sendMessage(); });
+
+// ------------------------- Upload File -------------------------
+fileInput.onchange = e => {
+  const file = e.target.files[0];
+  if(!file) return;
+
+  // Hiển thị preview
+  const url = URL.createObjectURL(file);
+    const img = document.createElement("img");
+    img.src = url;
+    img.style.maxWidth = "200px";
+    appendMsg("user", "", true); 
+    chat.lastChild.appendChild(img);
+
+  // Gửi lên server (nếu muốn)
+  const formData = new FormData();
+  formData.append("file", file);
+  fetch("/api/upload-image", { method:"POST", body:formData })
+    .then(r => r.json())
+    .then(data => appendMsg("bot", data.reply || "File uploaded"));
+};
+
+// ------------------------- Screen Crop -------------------------
+let cropDiv = null;
+let startX = 0, startY = 0, isDragging = false;
+
+function startCrop(e){
+  startX = e.clientX; startY = e.clientY;
+  cropDiv = document.createElement("div");
+  cropDiv.style.position = "absolute";
+  cropDiv.style.border = "2px dashed red";
+  cropDiv.style.background = "rgba(255,255,255,0.1)";
+  cropDiv.style.left = startX+"px";
+  cropDiv.style.top = startY+"px";
+  cropDiv.style.zIndex = 10000;
+  overlay.appendChild(cropDiv);
+  isDragging = true;
+}
+
+function doCrop(e){
+  if(!isDragging) return;
+  const w = e.clientX - startX;
+  const h = e.clientY - startY;
+  cropDiv.style.width = Math.abs(w) + "px";
+  cropDiv.style.height = Math.abs(h) + "px";
+  cropDiv.style.left = (w<0 ? e.clientX : startX) + "px";
+  cropDiv.style.top = (h<0 ? e.clientY : startY) + "px";
+}
+
+async function finishCrop(e){
+  if(!isDragging) return;
+  isDragging = false;
+
+  const rect = cropDiv.getBoundingClientRect();
+  overlay.style.display = "none";
+  overlay.innerHTML = "";
+
+  const canvas = await html2canvas(document.body, {
+    x: rect.left, y: rect.top,
+    width: rect.width, height: rect.height,
+    scrollX: -window.scrollX, scrollY: -window.scrollY
+  });
+
+  canvas.toBlob(blob => {
+  const url = URL.createObjectURL(blob); // tạo URL hiển thị
+  const img = document.createElement("img");
+  img.src = url;
+  img.style.maxWidth = "200px";
+  appendMsg("user", "", true); // tạo div trống để chứa image
+  chat.lastChild.appendChild(img);
+
+  // gửi lên server nếu muốn
+  const formData = new FormData();
+  formData.append("file", blob, "crop.png");
+  fetch("/api/upload-image", { method:"POST", body: formData })
+    .then(r => r.json())
+    .then(data => appendMsg("bot", data.reply || "Crop sent"));
+});
+  overlay.removeEventListener("mousedown", startCrop);
+  overlay.removeEventListener("mousemove", doCrop);
+  overlay.removeEventListener("mouseup", finishCrop);
+}
+
+cropBtn.onclick = () => {
+  overlay.style.display = "block";
+  overlay.addEventListener("mousedown", startCrop);
+  overlay.addEventListener("mousemove", doCrop);
+  overlay.addEventListener("mouseup", finishCrop);
+
+  // Hủy crop với ESC
+  const escHandler = e => {
+    if(e.key==="Escape"){
+      overlay.style.display="none";
+      overlay.innerHTML="";
+      overlay.removeEventListener("mousedown", startCrop);
+      overlay.removeEventListener("mousemove", doCrop);
+      overlay.removeEventListener("mouseup", finishCrop);
+      document.removeEventListener("keydown", escHandler);
+    }
+  };
+  document.addEventListener("keydown", escHandler);
+};
+
+// ------------------------- Book modal -------------------------
+function openBookModal(title, author, price, cover){
+  document.getElementById("modal-title").textContent = title;
+  document.getElementById("modal-author").textContent = author;
+  document.getElementById("modal-price").textContent = price+" VND";
+  document.getElementById("modal-cover").src = cover;
+  document.getElementById("book-modal").style.display = "flex";
+}
+function closeBookModal(){ document.getElementById("book-modal").style.display="none"; }
+
+// ------------------------- Load recommended -------------------------
+async function loadRecommended(){
+  const res = await fetch("{{ url_for('static', filename='data/books.json') }}");
+  const books = await res.json();
+  const randomBooks = books.sort(()=>0.5-Math.random()).slice(0,6);
+  const recList = document.getElementById("recommended-list");
+  recList.innerHTML = "";
+  randomBooks.forEach(book=>{
+    const div = document.createElement("div");
+    div.className = "thumb-card";
+    div.onclick = ()=>openBookModal(book.title, book.author, book.price, book.cover);
+    div.innerHTML = `<img src="${book.cover}" alt="${book.title}">`;
+    recList.appendChild(div);
+  });
+}
+loadRecommended();
+</script>
+
+</body>
+</html>

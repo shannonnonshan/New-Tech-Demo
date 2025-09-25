@@ -1,269 +1,171 @@
 # app.py
 import os
 import io
-import time
+import json
 import base64
-import requests
+import time
 from PIL import Image
+from flask import Flask, render_template, request, jsonify, send_from_directory
 import pytesseract
-import gradio as gr
+import requests
 
-# ---------------------------
-# Config / DB giả lập
-# ---------------------------
-HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")  # set env var if you want HF inference
+# ========== Config ==========
+# If tesseract is not in PATH on Windows, uncomment and set path:
+# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")  # optional
 HF_HEADERS = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"} if HUGGINGFACE_TOKEN else None
 
-# Minimal bookstore DB (sample). You can extend or connect DB real.
-BOOKS_DB = [
-    {"id": 1, "title": "1984", "author": "George Orwell", "price": 120000, "cover": None, "keywords": ["1984"]},
-    {"id": 2, "title": "Animal Farm", "author": "George Orwell", "price": 90000, "cover": None, "keywords": ["animal farm", "animal", "farm"]},
-    {"id": 3, "title": "Harry Potter and the Prisoner of Azkaban", "author": "J.K. Rowling", "price": 150000, "cover": None, "keywords": ["harry potter", "prisoner of azkaban", "azkaban"]},
-    {"id": 4, "title": "The Great Gatsby", "author": "F. Scott Fitzgerald", "price": 100000, "cover": None, "keywords": ["great gatsby", "gatsby"]},
-]
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(BASE_DIR, "static", "data", "books.json")
 
-# ---------------------------
-# Helpers: DB lookup + OCR
-# ---------------------------
+
+# ========== Load DB ==========
+with open(DATA_PATH, "r", encoding="utf-8") as f:
+    BOOKS = json.load(f)
+
+# ========== Helpers ==========
 def find_books_by_text(text):
     text = (text or "").lower()
     found = []
-    for b in BOOKS_DB:
-        for k in b["keywords"]:
+    for b in BOOKS:
+        for k in b.get("keywords", []):
             if k in text:
                 found.append(b)
                 break
     return found
 
-def query_book_price_by_title_fragment(fragment):
+def query_price_by_fragment(fragment):
     found = find_books_by_text(fragment)
     if not found:
-        return "Không tìm thấy sách trong DB."
-    lines = [f"{b['title']} — {b['price']} VND" for b in found]
-    return "\n".join(lines)
+        return None
+    return found
 
-def ocr_from_image(pil_img):
+def ocr_image(pil_img: Image.Image):
     try:
         txt = pytesseract.image_to_string(pil_img)
         return txt.strip()
     except Exception as e:
         return ""
 
-# ---------------------------
-# Hugging Face inference helpers (image captioning / vqa)
-# ---------------------------
-def hf_call_model(model_id, payload_json):
-    """Generic call to Hugging Face Inference API. Returns dict or text."""
-    if not HUGGINGFACE_TOKEN:
-        return {"error": "No HUGGINGFACE_TOKEN set. Set env var HUGGINGFACE_TOKEN for HF inference."}
-    url = f"https://api-inference.huggingface.co/models/{model_id}"
-    try:
-        resp = requests.post(url, headers=HF_HEADERS, json=payload_json, timeout=60)
-    except Exception as e:
-        return {"error": str(e)}
-    if resp.status_code != 200:
-        return {"error": f"Status {resp.status_code}: {resp.text}"}
-    try:
-        return resp.json()
-    except:
-        return {"result": resp.text}
+def image_from_base64(data_url):
+    header, b64 = data_url.split(",", 1)
+    img_bytes = base64.b64decode(b64)
+    return Image.open(io.BytesIO(img_bytes))
 
-def image_to_base64(pil_img):
+# Optional: call HF inference (caption or vqa) if you want (token required)
+def hf_image_caption(pil_img, model="Salesforce/blip-image-captioning-base"):
+    if not HUGGINGFACE_TOKEN:
+        return {"error": "No HUGGINGFACE_TOKEN"}
+    url = f"https://api-inference.huggingface.co/models/{model}"
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
-    b = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{b}"
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    payload = {"inputs": {"image": {"data": f"data:image/png;base64,{b64}"}}}
+    resp = requests.post(url, headers=HF_HEADERS, json=payload, timeout=60)
+    if resp.status_code != 200:
+        return {"error": resp.text}
+    return resp.json()
 
-def hf_caption(image: Image.Image, model_id="Salesforce/blip-image-captioning-base"):
-    """Use HF inference API to get caption. Model must support image-to-text."""
-    img_b64 = image_to_base64(image)
-    payload = {"inputs": {"image": {"data": img_b64, "type": "data:image/png;base64"}}}
-    resp = hf_call_model(model_id, payload)
-    # Different models return different json. Try to extract likely text:
-    # Many blip models return [{"generated_text": "..."}]
-    if isinstance(resp, dict) and resp.get("error"):
-        return f"[HF error] {resp['error']}"
-    if isinstance(resp, list) and len(resp)>0 and isinstance(resp[0], dict) and "generated_text" in resp[0]:
-        return resp[0]["generated_text"]
-    # fallback: if a single string or dict with 'text'
-    if isinstance(resp, dict) and "generated_text" in resp:
-        return resp["generated_text"]
-    if isinstance(resp, str):
-        return resp
-    # else stringify
-    return str(resp)
+# ========== Flask app ==========
+app = Flask(__name__, static_folder="static", template_folder="templates")
 
-def hf_vqa(image: Image.Image, question: str, model_id="dandelin/vilt-b32-finetuned-vqa"):
-    """Call HF VQA model (if available). Some VQA models expect 'inputs': {'image':..., 'question': ...}"""
-    img_b64 = image_to_base64(image)
-    payload = {"inputs": {"image": {"data": img_b64, "type": "data:image/png;base64"}, "question": question}}
-    resp = hf_call_model(model_id, payload)
-    if isinstance(resp, dict) and resp.get("error"):
-        return f"[HF error] {resp['error']}"
-    # Many VQA models return [{'answer': '...'}] or [{'generated_text':'...'}]
-    if isinstance(resp, list) and len(resp)>0:
-        first = resp[0]
-        if isinstance(first, dict):
-            for k in ("answer","generated_text","caption","text"):
-                if k in first:
-                    return first[k]
-            # fallback: join values
-            return " | ".join(f"{k}:{v}" for k,v in first.items())
-    if isinstance(resp, dict) and "answer" in resp:
-        return resp["answer"]
-    return str(resp)
 
-# ---------------------------
-# Modal handlers
-# ---------------------------
-def handle_local_ocr(image, text_query):
-    # If image present: OCR -> find books
-    if image is None:
-        # only text query
-        return query_book_price_by_title_fragment(text_query)
-    # crop passed image is already region selected by gradio
-    txt = ocr_from_image(image)
-    found = find_books_by_text(txt)
-    if not found:
-        return f"OCR đọc được: '{txt}'. Không thấy sách khớp trong DB."
-    return simple_cot_answer(found, text_query, ocr_text=txt)
+@app.route("/")
+def index():
+    return render_template("index.html", books=BOOKS)
 
-def handle_hf_caption(image, text_query):
-    if HUGGINGFACE_TOKEN is None:
-        return "[No HF token] Set HUGGINGFACE_TOKEN env var to use HF caption model."
-    cap = hf_caption(image)
-    found = find_books_by_text(cap + " " + (ocr_from_image(image) or ""))
-    if not found:
-        return f"Caption: '{cap}'. Không thấy sách khớp."
-    return simple_cot_answer(found, text_query, caption=cap)
 
-def handle_hf_vqa(image, text_query):
-    if HUGGINGFACE_TOKEN is None:
-        return "[No HF token] Set HUGGINGFACE_TOKEN env var to use HF VQA model."
-    # If user provided text_query, pass it as question; else use generic "What's in image?"
-    question = text_query or "What is this book?"
-    ans = hf_vqa(image, question)
-    # Postprocess: try to detect book titles in answer
-    found = find_books_by_text(ans)
+@app.route("/api/text-query", methods=["POST"])
+def api_text_query():
+    body = request.json or {}
+    q = body.get("query", "")
+    if not q:
+        return jsonify({"ok": False, "reply": "Bạn chưa nhập câu hỏi."})
+    found = query_price_by_fragment(q)
     if found:
-        return simple_cot_answer(found, text_query, vqa_answer=ans)
-    return f"VQA answer: '{ans}'."
+        lines = [f"{b['title']} — {b['price']} VND" for b in found]
+        reply = "\n".join(lines)
+    else:
+        reply = "Xin lỗi, không tìm thấy sách phù hợp trong database."
+    return jsonify({"ok": True, "reply": reply})
 
-def simple_cot_answer(found_books, question, ocr_text=None, caption=None, vqa_answer=None):
-    """Return short-plan + final answer (CoT-style short)."""
-    titles = [b["title"] for b in found_books]
-    # If question asks about total
-    q = (question or "").lower()
-    if any(w in q for w in ["tổng", "cộng", "total", "price sum", "bao nhiêu"]):
-        total = sum(b["price"] for b in found_books)
-        plan = "Plan (short):\n- Read image text/caption\n- Match titles in DB\n- Sum prices\n"
-        return f"{plan}\nFound: {', '.join(titles)}.\nTotal price = {total} VND."
-    # default: list prices
-    lines = [f"{b['title']}: {b['price']} VND" for b in found_books]
-    plan = "Plan (short):\n- Identify book from image/text\n- Return price\n"
-    return f"{plan}\n" + "\n".join(lines)
 
-# ---------------------------
-# Compare runner: run selected set of modals and show side-by-side
-# ---------------------------
-def compare_modal_responses(image, text_query, selected_modals):
-    """
-    selected_modals: list of modal keys like ["ocr","caption","vqa","combined"]
-    """
-    results = []
-    for m in selected_modals:
-        t0 = time.time()
-        if m == "ocr":
-            out = handle_local_ocr(image, text_query)
-        elif m == "caption":
-            out = handle_hf_caption(image, text_query)
-        elif m == "vqa":
-            out = handle_hf_vqa(image, text_query)
-        elif m == "combined":
-            # combined: caption + OCR + simple ensemble
-            cap = hf_caption(image) if HUGGINGFACE_TOKEN else ""
-            ocr = ocr_from_image(image)
-            merged = " ".join([cap, ocr])
-            found = find_books_by_text(merged)
-            if found:
-                out = simple_cot_answer(found, text_query, ocr_text=ocr, caption=cap)
-            else:
-                out = f"Caption:'{cap}' | OCR:'{ocr}' -> no match"
+@app.route("/api/upload-image", methods=["POST"])
+def api_upload_image():
+    # Accept multipart form with file or JSON with base64 'image'
+    if "file" in request.files:
+        file = request.files["file"]
+        pil = Image.open(file.stream).convert("RGB")
+    else:
+        data = request.json or {}
+        b64 = data.get("image")
+        if not b64:
+            return jsonify({"ok": False, "error": "No image provided"}), 400
+        pil = image_from_base64(b64)
+        pil = pil.convert("RGB")
+
+    # OCR
+    ocr_text = ocr_image(pil)
+    found = find_books_by_text(ocr_text)
+    if found:
+        reply = {"source":"ocr", "ocr_text": ocr_text, "found": [{"title":b["title"], "price": b["price"]} for b in found]}
+        return jsonify({"ok": True, "reply": reply})
+    # fallback: if HF token is set, call caption
+    if HUGGINGFACE_TOKEN:
+        cap = hf_image_caption(pil)
+        # if successful, try to extract text or match DB
+        if isinstance(cap, list) and len(cap)>0 and isinstance(cap[0], dict):
+            caption_text = cap[0].get("generated_text") or cap[0].get("caption") or str(cap[0])
+        elif isinstance(cap, dict) and cap.get("error"):
+            caption_text = ""
         else:
-            out = "Unknown modal"
-        dt = time.time() - t0
-        results.append({"modal": m, "response": out, "time_s": round(dt, 2)})
-    return results
+            caption_text = str(cap)
+        found2 = find_books_by_text(caption_text + " " + ocr_text)
+        if found2:
+            reply = {"source":"hf_caption", "caption": caption_text, "found": [{"title":b["title"], "price":b["price"]} for b in found2]}
+            return jsonify({"ok": True, "reply": reply})
+        else:
+            return jsonify({"ok": True, "reply": {"source":"hf_caption", "caption": caption_text, "found": []}})
+    return jsonify({"ok": True, "reply": {"source":"ocr", "ocr_text": ocr_text, "found": []}})
 
-# ---------------------------
-# UI: Bookstore Home + Chatbox multimodal
-# ---------------------------
-def serve_ui():
-    with gr.Blocks(css="""
-        .book-card {border:1px solid #eee;padding:10px;border-radius:8px;margin-bottom:8px}
-        .sidebar {background:#fafafa;padding:12px;border-radius:8px}
-    """) as demo:
-        # Header
-        with gr.Row():
-            gr.Markdown("## 📚 BookStore AI — Home")
-            gr.HTML("<p style='color:gray'>Demo multimodal: text, image, crop, compare modal outputs</p>")
 
-        with gr.Row():
-            # Left: Shop / catalog
-            with gr.Column(scale=1):
-                gr.Markdown("### 🛍️ Shop")
-                for b in BOOKS_DB:
-                    # For simplicity we just show title & price; you can add images
-                    gr.Markdown(f"<div class='book-card'><b>{b['title']}</b><br><i>{b['author']}</i><br>💰 {b['price']} VND</div>", elem_classes="book-card")
+@app.route("/api/multimodal-reason", methods=["POST"])
+def api_multimodal_reason():
+    body = request.json or {}
+    b64 = body.get("image")
+    q = body.get("query", "") or ""
+    if not b64:
+        return jsonify({"ok": False, "error": "No image"}), 400
+    pil = image_from_base64(b64).convert("RGB")
+    # OCR whole image
+    ocr_text = ocr_image(pil)
+    found = find_books_by_text(ocr_text)
+    if not found and HUGGINGFACE_TOKEN:
+        cap = hf_image_caption(pil)
+        caption_text = ""
+        if isinstance(cap, list) and len(cap)>0 and isinstance(cap[0], dict):
+            caption_text = cap[0].get("generated_text","")
+        else:
+            caption_text = str(cap)
+        found = find_books_by_text(caption_text + " " + ocr_text)
+    if not found:
+        return jsonify({"ok": True, "reply": {"plan":"Read->Match->No match", "found":[], "ocr":ocr_text}})
+    # simple CoT: if question asks for total then sum
+    qlow = q.lower()
+    if any(w in qlow for w in ["tổng", "cộng", "total", "bao nhiêu"]):
+        total = sum(b['price'] for b in found)
+        plan = ["1) Read image text/caption", "2) Match titles in DB", "3) Sum prices"]
+        return jsonify({"ok": True, "reply": {"plan": plan, "found":[{"title":b["title"],"price":b["price"]} for b in found], "total": total}})
+    else:
+        plan = ["1) Read image text/caption", "2) Match titles in DB", "3) Return prices"]
+        return jsonify({"ok": True, "reply": {"plan": plan, "found":[{"title":b["title"],"price":b["price"]} for b in found]}})
 
-            # Right: Chatbox panel
-            with gr.Column(scale=1):
-                gr.Markdown("### 🤖 Chatbox (Multimodal)")
-
-                text_in = gr.Textbox(label="Nhập câu hỏi (hoặc để trống để dùng image)", placeholder="VD: Tổng giá bao nhiêu?")
-                image_in = gr.Image(
-                    label="Upload hoặc chụp ảnh",
-                    type="pil",
-                    sources=["upload", "webcam"]
-                )
-                modal_choices = gr.CheckboxGroup(label="Chọn modal để chạy (chọn nhiều để so sánh)", value=["ocr","caption","vqa"], choices=[
-                    ("ocr","Local OCR (pytesseract)"),
-                    ("caption","HF Caption (BLIP)"),
-                    ("vqa","HF VQA (VILT)"),
-                    ("combined","Combined (caption+ocr)")
-                ])
-                btn_compare = gr.Button("So sánh responses")
-                compare_out = gr.Dataframe(headers=["Modal","Response","Time (s)"], interactive=False)
-
-                # Single-run quick ask (runs the first selected modal)
-                btn_ask = gr.Button("Hỏi nhanh (first selected)")
-                quick_out = gr.Textbox(label="Kết quả nhanh")
-
-                def on_compare(img, q, selected):
-                    if not selected:
-                        return gr.update(value=[]), gr.update(value="Vui lòng chọn ít nhất 1 modal")
-                    res = compare_modal_responses(img, q, selected)
-                    # turn into table rows
-                    rows = [[r["modal"], r["response"], r["time_s"]] for r in res]
-                    return rows
-
-                def on_quick(img, q, selected):
-                    if not selected:
-                        return "Vui lòng chọn ít nhất 1 modal"
-                    first = selected[0]
-                    out = compare_modal_responses(img, q, [first])[0]["response"]
-                    return out
-
-                btn_compare.click(on_compare, inputs=[image_in, text_in, modal_choices], outputs=[compare_out])
-                btn_ask.click(on_quick, inputs=[image_in, text_in, modal_choices], outputs=[quick_out])
-
-                gr.Markdown("**Ghi chú:** Nếu bạn không có HUGGINGFACE_TOKEN thì HF modal sẽ báo lỗi và app sẽ dùng OCR thay thế.")
-
-        # Footer
-        gr.Markdown("---")
-        gr.Markdown("© Demo — Multimodal BookStore")
-
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+# Serve static (optional)
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    return send_from_directory("static", filename)
 
 if __name__ == "__main__":
-    serve_ui()
+    # run local server
+    app.run(host="127.0.0.1", port=5000, debug=True)
