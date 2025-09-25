@@ -81,40 +81,58 @@ def api_text_query():
     body = request.json or {}
     q = body.get("query", "")
     if not q:
-        return jsonify({"ok": False, "reply": "Bạn chưa nhập câu hỏi."})
+        return jsonify({"ok": False, "reply": "You have not entered a question."})
     found = query_price_by_fragment(q)
     if found:
         lines = [f"{b['title']} — {b['price']} VND" for b in found]
         reply = "\n".join(lines)
     else:
-        reply = "Xin lỗi, không tìm thấy sách phù hợp trong database."
+        reply = "Sorry, no matching books found."
     return jsonify({"ok": True, "reply": reply})
-
 
 @app.route("/api/upload-image", methods=["POST"])
 def api_upload_image():
-    # Accept multipart form with file or JSON with base64 'image'
+    # loading: frontend có thể tự handle
+    status = "loading"
+
+    # Nhận file multipart
     if "file" in request.files:
         file = request.files["file"]
-        pil = Image.open(file.stream).convert("RGB")
+        try:
+            pil = Image.open(file.stream).convert("RGB")
+            status = "I see your image"
+        except Exception:
+            return jsonify({"status": "not image found"}), 400
+    # Nhận base64 JSON
     else:
         data = request.json or {}
         b64 = data.get("image")
         if not b64:
-            return jsonify({"ok": False, "error": "No image provided"}), 400
+            return jsonify({"status": "not image found"}), 400
         pil = image_from_base64(b64)
-        pil = pil.convert("RGB")
+        if pil is None:
+            return jsonify({"status": "not image found"}), 400
+        status = "I see your image"
 
-    # OCR
+    # Xác nhận crop ảnh
+    width, height = pil.size
+
+    # --- Giữ nguyên phần OCR + tìm sách ---
     ocr_text = ocr_image(pil)
     found = find_books_by_text(ocr_text)
     if found:
-        reply = {"source":"ocr", "ocr_text": ocr_text, "found": [{"title":b["title"], "price": b["price"]} for b in found]}
+        reply = {
+            "status": status,
+            "source":"ocr",
+            "ocr_text": ocr_text,
+            "image_size": {"width": width, "height": height},
+            "found": [{"title": b["title"], "price": b["price"]} for b in found]
+        }
         return jsonify({"ok": True, "reply": reply})
-    # fallback: if HF token is set, call caption
+
+    # fallback: nếu có HuggingFace token
     if HUGGINGFACE_TOKEN:
         cap = hf_image_caption(pil)
-        # if successful, try to extract text or match DB
         if isinstance(cap, list) and len(cap)>0 and isinstance(cap[0], dict):
             caption_text = cap[0].get("generated_text") or cap[0].get("caption") or str(cap[0])
         elif isinstance(cap, dict) and cap.get("error"):
@@ -122,14 +140,54 @@ def api_upload_image():
         else:
             caption_text = str(cap)
         found2 = find_books_by_text(caption_text + " " + ocr_text)
-        if found2:
-            reply = {"source":"hf_caption", "caption": caption_text, "found": [{"title":b["title"], "price":b["price"]} for b in found2]}
-            return jsonify({"ok": True, "reply": reply})
-        else:
-            return jsonify({"ok": True, "reply": {"source":"hf_caption", "caption": caption_text, "found": []}})
-    return jsonify({"ok": True, "reply": {"source":"ocr", "ocr_text": ocr_text, "found": []}})
+        reply = {
+            "status": status,
+            "source":"hf_caption",
+            "caption": caption_text,
+            "image_size": {"width": width, "height": height},
+            "found": [{"title": b["title"], "price": b["price"]} for b in found2] if found2 else []
+        }
+        return jsonify({"ok": True, "reply": reply})
 
+    # Trường hợp không tìm thấy gì
+    return jsonify({
+        "ok": True,
+        "reply": {
+            "status": status,
+            "source":"ocr",
+            "ocr_text": ocr_text,
+            "image_size": {"width": width, "height": height},
+            "found": []
+        }
+    })
+@app.route("/api/query", methods=["POST"])
+def api_query():
+    # --- Xử lý file nếu gửi ---
+    if "file" in request.files:
+        try:
+            pil = Image.open(request.files["file"].stream).convert("RGB")
+            ocr_text = ocr_image(pil)
+        except Exception:
+            return jsonify({"ok": False, "reply": "Invalid image"}), 400
+    else:
+        ocr_text = ""
 
+    # --- Xử lý text nếu gửi JSON ---
+    body = request.form.get("query") or ""
+    if not body and not ocr_text:
+        return jsonify({"ok": False, "reply": "No query or image provided."})
+
+    # --- Tìm sách ---
+    found_books = find_books_by_text(ocr_text)
+    if body:
+        found_books += query_price_by_fragment(body)
+
+    if not found_books:
+        return jsonify({"ok": True, "reply": "No matching books found."})
+
+    lines = [f"{b['title']} — {b['price']} VND" for b in found_books]
+    return jsonify({"ok": True, "reply": "\n".join(lines)})
+    
 @app.route("/api/multimodal-reason", methods=["POST"])
 def api_multimodal_reason():
     body = request.json or {}
