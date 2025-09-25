@@ -152,74 +152,90 @@ fileInput.onchange = e => {
 };
 
 // ------------------------- Screen Crop -------------------------
-let cropDiv = null;
-let startX = 0, startY = 0, isDragging = false;
+let cropDiv=null, startX=0, startY=0, isDragging=false;
 
 function startCrop(e){
-  startX = e.clientX; startY = e.clientY;
-  cropDiv = document.createElement("div");
-  cropDiv.style.position = "absolute";
-  cropDiv.style.border = "2px dashed red";
-  cropDiv.style.background = "rgba(255,255,255,0.1)";
-  cropDiv.style.left = startX+"px";
-  cropDiv.style.top = startY+"px";
-  cropDiv.style.zIndex = 10000;
+  startX=e.clientX; startY=e.clientY;
+  cropDiv=document.createElement("div");
+  Object.assign(cropDiv.style,{
+    position:"absolute",
+    border:"2px dashed red",
+    background:"rgba(255,255,255,0.1)",
+    left:startX+"px",
+    top:startY+"px",
+    zIndex:10000
+  });
   overlay.appendChild(cropDiv);
-  isDragging = true;
+  isDragging=true;
 }
 
 function doCrop(e){
   if(!isDragging) return;
-  const w = e.clientX - startX;
-  const h = e.clientY - startY;
-  cropDiv.style.width = Math.abs(w) + "px";
-  cropDiv.style.height = Math.abs(h) + "px";
-  cropDiv.style.left = (w<0 ? e.clientX : startX) + "px";
-  cropDiv.style.top = (h<0 ? e.clientY : startY) + "px";
+  const w=e.clientX-startX, h=e.clientY-startY;
+  cropDiv.style.width=Math.abs(w)+"px";
+  cropDiv.style.height=Math.abs(h)+"px";
+  cropDiv.style.left=(w<0?e.clientX:startX)+"px";
+  cropDiv.style.top=(h<0?e.clientY:startY)+"px";
 }
 
 async function finishCrop(e){
   if(!isDragging) return;
-  isDragging = false;
+  isDragging=false;
+  const rect=cropDiv.getBoundingClientRect();
+  overlay.style.display="none";
+  overlay.innerHTML="";
 
-  const rect = cropDiv.getBoundingClientRect();
-  overlay.style.display = "none";
-  overlay.innerHTML = "";
+  // Đợi font + ảnh load xong
+  await document.fonts.ready;
+  const imgs = Array.from(document.images);
+  await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(res=>img.onload=res)));
 
-  const canvas = await html2canvas(document.body, {
-    x: rect.left, y: rect.top,
-    width: rect.width, height: rect.height,
-    scrollX: -window.scrollX, scrollY: -window.scrollY
+  // Chuyển ảnh internet sang base64 để Chrome render đúng
+  for(let img of imgs){
+    if(!img.src.startsWith("data:")){
+      try{
+        const resp = await fetch(img.src, {mode:"cors"});
+        const blob = await resp.blob();
+        const reader = new FileReader();
+        reader.onloadend = ()=>{img.src = reader.result;
+          img.alt = img.alt || "Image";
+        };
+        reader.readAsDataURL(blob);
+      }catch(err){ console.warn("Cannot fetch image", img.src); }
+    }
+  }
+
+  const canvas = await html2canvas(document.body,{
+    x:rect.left, y:rect.top, width:rect.width, height:rect.height,
+    scrollX:0, scrollY:0, useCORS:true, allowTaint:true
   });
 
-  canvas.toBlob(blob => {
-  const url = URL.createObjectURL(blob); // tạo URL hiển thị
-  const img = document.createElement("img");
-  img.src = url;
-  img.style.maxWidth = "200px";
-  appendMsg("user", "", true); // tạo div trống để chứa image
-  chat.lastChild.appendChild(img);
+  canvas.toBlob(blob=>{
+    const url=URL.createObjectURL(blob);
+    const img=document.createElement("img");
+    img.src=url;
+    appendMsg("user","",true);
+    chat.lastChild.appendChild(img);
 
-  // gửi lên server nếu muốn
-  const formData = new FormData();
-  formData.append("file", blob, "crop.png");
-  fetch("/api/query", { method:"POST", body: formData })
-    .then(r => r.json())
-    .then(data => appendMsg("bot", data.reply || "Crop sent"));
-});
+    const formData=new FormData();
+    formData.append("file", blob, "crop.png");
+    fetch("/api/query",{method:"POST",body:formData})
+      .then(r=>r.json())
+      .then(data=>appendMsg("bot", data.reply || "Crop sent"));
+  });
+
   overlay.removeEventListener("mousedown", startCrop);
   overlay.removeEventListener("mousemove", doCrop);
   overlay.removeEventListener("mouseup", finishCrop);
 }
 
-cropBtn.onclick = () => {
-  overlay.style.display = "block";
+cropBtn.onclick = ()=>{
+  overlay.style.display="block";
   overlay.addEventListener("mousedown", startCrop);
   overlay.addEventListener("mousemove", doCrop);
   overlay.addEventListener("mouseup", finishCrop);
 
-  // Hủy crop với ESC
-  const escHandler = e => {
+  const escHandler=e=>{
     if(e.key==="Escape"){
       overlay.style.display="none";
       overlay.innerHTML="";
