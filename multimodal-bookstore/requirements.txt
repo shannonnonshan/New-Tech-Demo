@@ -1,4 +1,8 @@
 Flask==2.3.2
-pillow
+Pillow
 pytesseract
 requests
+python-dotenv
+openai
+faiss-cpu
+sentence-transformers
