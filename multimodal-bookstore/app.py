@@ -1,30 +1,50 @@
 import os
 import io
-import json
 import base64
 import requests
+import random
 from PIL import Image
 from flask import Flask, render_template, request, jsonify, send_from_directory, session
 import pytesseract
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
+from flask_pymongo import PyMongo
 
 # ================== CONFIG ==================
 load_dotenv()
+
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+MONGO_URI = os.environ.get("MONGO_URI")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(BASE_DIR, "static", "data", "books.json")
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-with open(DATA_PATH, "r", encoding="utf-8") as f:
-    BOOKS = json.load(f)
-
-# Flask secret key (để lưu session cho client)
+# Flask app
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.environ.get("SECRET_KEY", "supersecret")
 
+# MongoDB config
+app.config["MONGO_URI"] = MONGO_URI
+mongo = PyMongo(app)
+
+@app.route("/api/books", methods=["GET"])
+def api_get_books():
+    books = list(mongo.db.books.find())
+    for book in books:
+        book["_id"] = str(book["_id"])  # convert ObjectId thành string
+    return jsonify({"ok": True, "books": books})
+
+@app.route("/api/recommended", methods=["GET"])
+def api_get_recommended():
+    books = list(mongo.db.books.find())
+    for book in books:
+        book["_id"] = str(book["_id"])
+    random_books = random.sample(books, min(len(books), 6))
+    return jsonify({"ok": True, "books": random_books})
+
 # ================== UTILS ==================
 def ocr_image(pil_img: Image.Image):
-    """Chạy OCR với pytesseract"""
     try:
         txt = pytesseract.image_to_string(pil_img)
         return txt.strip()
@@ -32,14 +52,12 @@ def ocr_image(pil_img: Image.Image):
         return ""
 
 def image_from_base64(data_url):
-    """Chuyển base64 -> PIL Image"""
     header, b64 = data_url.split(",", 1)
     img_bytes = base64.b64decode(b64)
     return Image.open(io.BytesIO(img_bytes))
 
 # ================== SESSION MANAGER ==================
 def get_session_history():
-    """Lấy lịch sử hội thoại từ session Flask"""
     if "history" not in session:
         session["history"] = [
             {
@@ -72,23 +90,24 @@ def ask_openrouter(messages, model="openai/gpt-4o-mini"):
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": model,
-        "messages": messages,
-    }
+    payload = {"model": model, "messages": messages}
 
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=30)
         r.raise_for_status()
         data = r.json()
-        return data["choices"][0]["message"]["content"]
+        choices = data.get("choices", [])
+        if choices and "message" in choices[0]:
+            return choices[0]["message"].get("content", "")
+        return "⚠️ Không nhận được phản hồi từ AI"
     except Exception as e:
         return f"⚠️ AI error (OpenRouter): {e}"
 
 # ================== ROUTES ==================
 @app.route("/")
 def index():
-    return render_template("index.html", books=BOOKS)
+    books = list(mongo.db.books.find())
+    return render_template("index.html", books=books)
 
 # -------- Reset session --------
 @app.route("/api/reset-session", methods=["POST"])
@@ -104,7 +123,8 @@ def api_text_query():
     if not q:
         return jsonify({"ok": False, "reply": "❌ Bạn chưa nhập gì cả."})
 
-    books_info = json.dumps(BOOKS, ensure_ascii=False)
+    books = list(mongo.db.books.find())
+    books_info = str(books)
 
     add_to_history("user", q)
     reply = ask_openrouter([
@@ -112,13 +132,13 @@ def api_text_query():
             "role": "system",
             "content": (
                 "Bạn là trợ lý AI của BooksLand (cửa hàng tại Thủ Đức). "
-                "Dưới đây là dữ liệu JSON về sách. "
+                "Dưới đây là dữ liệu MongoDB về sách. "
                 "Hãy kiểm tra xem có sách nào phù hợp với câu hỏi khách hàng không. "
                 "Nếu có, trả lời đúng tên và giá. "
                 "Nếu không có thì trả lời: 'Không có trong cửa hàng BooksLand'."
             )
         },
-        {"role": "system", "content": f"Dữ liệu books.json: {books_info}"},
+        {"role": "system", "content": f"Dữ liệu MongoDB: {books_info}"},
         *get_session_history(),
         {"role": "user", "content": q}
     ])
@@ -139,7 +159,8 @@ def api_query():
         pil = image_from_base64(b64).convert("RGB")
 
     ocr_text = ocr_image(pil)
-    books_info = json.dumps(BOOKS, ensure_ascii=False)
+    books = list(mongo.db.books.find())
+    books_info = str(books)
 
     add_to_history("user", f"OCR text từ ảnh: {ocr_text}")
     reply = ask_openrouter([
@@ -147,20 +168,47 @@ def api_query():
             "role": "system",
             "content": (
                 "Bạn là trợ lý AI của BooksLand (cửa hàng tại Thủ Đức). "
-                "Dưới đây là dữ liệu JSON về sách. "
-                "Hãy so khớp nội dung OCR với JSON. "
+                "Dưới đây là dữ liệu MongoDB về sách. "
+                "Hãy so khớp nội dung OCR với database. "
                 "Nếu có sách phù hợp thì trả lời theo format: "
                 "'Your image is a book called <tên sách> cost <giá> VND'. "
                 "Nếu không có thì trả lời: 'Không tìm thấy sách nào phù hợp trong BooksLand'."
             )
         },
-        {"role": "system", "content": f"Dữ liệu books.json: {books_info}"},
+        {"role": "system", "content": f"Dữ liệu MongoDB: {books_info}"},
         *get_session_history(),
         {"role": "user", "content": f"Nội dung OCR: {ocr_text}"}
     ])
     add_to_history("assistant", reply)
 
     return jsonify({"ok": True, "reply": reply})
+
+# -------- Add book --------
+@app.route("/api/add-book", methods=["POST"])
+def api_add_book():
+    title = request.form.get("new-title")
+    author = request.form.get("new-author")
+    price = request.form.get("new-price")
+    cover = request.files.get("new-cover")
+
+    if not title or not author:
+        return jsonify({"ok": False, "message": "❌ Thiếu tiêu đề hoặc tác giả."}), 400
+
+    cover_url = None
+    if cover:
+        filename = secure_filename(cover.filename)
+        save_path = os.path.join(UPLOAD_FOLDER, filename)
+        cover.save(save_path)
+        cover_url = "/static/uploads/" + filename
+
+    mongo.db.books.insert_one({
+        "title": title,
+        "author": author,
+        "price": int(price) if price and price.isdigit() else 0,
+        "cover": cover_url
+    })
+
+    return jsonify({"ok": True, "message": "✅ Book added to MongoDB"})
 
 # -------- Static files --------
 @app.route("/static/<path:filename>")

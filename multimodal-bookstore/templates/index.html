@@ -15,6 +15,7 @@
         <button><i class="fa-solid fa-book"></i></button>
         <button><i class="fa-solid fa-heart"></i></button>
         <button><i class="fa-solid fa-play"></i></button>
+        <button id="add-book-btn"><i class="fa-solid fa-plus"></i></button>
       </nav>
       <nav class="nav-icons bottom">
         <button><i class="fa-solid fa-gear"></i></button>
@@ -42,15 +43,7 @@
       <!-- Popular -->
       <section class="popular">
         <h2>Popular</h2>
-        <div class="book-list">
-          {% for book in books[:6] %}
-          <div class="book-card">
-            <img src="{{ book.cover }}" alt="{{ book.title }}">
-            <h3>{{ book.title }}</h3>
-            <p>{{ book.author }}</p>
-            <span class="price">{{ book.price }} VND</span>
-          </div>
-          {% endfor %}
+        <div class="book-list" id="book-list">
         </div>
       </section>
 
@@ -65,8 +58,10 @@
     <aside class="chatbox">
       <h2>Chat</h2>
       <div id="chat-messages"></div>
+      <div id="input-attachments" style="display:flex; gap:10px; margin-top:5px;"></div>
+
       <!-- Chat input -->
-        <div class="chat-input">
+      <div class="chat-input">
         <input type="text" id="user-input" placeholder="Write a message...">
         <!-- Upload file -->
         <label for="file-upload" class="upload-btn"><i class="fa-solid fa-image"></i></label>
@@ -74,7 +69,7 @@
         <!-- Crop screen -->
         <button id="crop-btn" type="button"><i class="fa-solid fa-crop"></i></button>
         <button id="send-btn" type="button"><i class="fa-solid fa-paper-plane"></i></button>
-        </div>
+      </div>
     </aside>
   </div>
 
@@ -89,192 +84,102 @@
     </div>
   </div>
 
+  <!-- Add Book Modal -->
+<div id="add-book-modal" class="modal">
+  <div class="modal-content add-book-form">
+    <span class="close" onclick="closeAddBookModal()">&times;</span>
+    <h2>➕ Add New Book</h2>
+    <form id="add-book-form" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="new-title">Title</label>
+        <input type="text" id="new-title" name="new-title" required>
+      </div>
+      <div class="form-group">
+        <label for="new-author">Author</label>
+        <input type="text" id="new-author" name="new-author" required>
+      </div>
+      <div class="form-group">
+        <label for="new-price">Price (VND)</label>
+        <input type="number" id="new-price" name="new-price" required>
+      </div>
+      <div class="form-group">
+        <label for="new-cover">Book Cover</label>
+        <input type="file" id="new-cover" name="new-cover" accept="image/*">
+        <div class="cover-preview">
+          <img id="cover-preview-img" src="" alt="Preview" style="display:none;">
+        </div>
+      </div>
+      <button type="submit" class="btn-submit">Save</button>
+    </form>
+  </div>
+</div>
+
   <!-- Screen Crop Overlay -->
   <div id="screen-crop-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.25); z-index:9999; cursor:crosshair;"></div>
 
   <!-- Scripts -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script>
-const sendBtn = document.getElementById("send-btn");
-const input = document.getElementById("user-input");
-const chat = document.getElementById("chat-messages");
-const fileInput = document.getElementById("file-upload");
-const cropBtn = document.getElementById("crop-btn");
-const overlay = document.getElementById("screen-crop-overlay");
+  <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 
-// ------------------------- Chat -------------------------
-function appendMsg(who, content, isHTML=false) {
-  const div = document.createElement("div");
-  div.className = "msg " + who;
-  if(isHTML) div.innerHTML = content;
-  else div.textContent = content;
-  chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
-}
+  <script>
+  async function loadBooks() {
+    try {
+      const res = await fetch("/api/books");
+      const data = await res.json();
 
-function sendMessage() {
-  const msg = input.value.trim();
-  if(!msg) return;
-  appendMsg("user", msg);
-  fetch("/api/text-query", {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({ query: msg })
-  })
-  .then(r => r.json())
-  .then(data => appendMsg("bot", data.reply));
-  input.value = "";
-}
+      if (data.ok) {
+        const container = document.getElementById("book-list");
+        container.innerHTML = ""; // clear
 
-sendBtn.onclick = sendMessage;
-input.addEventListener("keydown", e => { if(e.key==="Enter") sendMessage(); });
-
-// ------------------------- Upload File -------------------------
-fileInput.onchange = e => {
-  const file = e.target.files[0];
-  if(!file) return;
-
-  // Hiển thị preview
-  const url = URL.createObjectURL(file);
-    const img = document.createElement("img");
-    img.src = url;
-    img.style.maxWidth = "200px";
-    appendMsg("user", "", true); 
-    chat.lastChild.appendChild(img);
-
-  // Gửi lên server (nếu muốn)
-  const formData = new FormData();
-  formData.append("file", file);
-  fetch("/api/query", { method:"POST", body:formData })
-    .then(r => r.json())
-    .then(data => appendMsg("bot", data.reply || "File uploaded"));
-};
-
-// ------------------------- Screen Crop -------------------------
-let cropDiv=null, startX=0, startY=0, isDragging=false;
-
-function startCrop(e){
-  startX=e.clientX; startY=e.clientY;
-  cropDiv=document.createElement("div");
-  Object.assign(cropDiv.style,{
-    position:"absolute",
-    border:"2px dashed red",
-    background:"rgba(255,255,255,0.1)",
-    left:startX+"px",
-    top:startY+"px",
-    zIndex:10000
-  });
-  overlay.appendChild(cropDiv);
-  isDragging=true;
-}
-
-function doCrop(e){
-  if(!isDragging) return;
-  const w=e.clientX-startX, h=e.clientY-startY;
-  cropDiv.style.width=Math.abs(w)+"px";
-  cropDiv.style.height=Math.abs(h)+"px";
-  cropDiv.style.left=(w<0?e.clientX:startX)+"px";
-  cropDiv.style.top=(h<0?e.clientY:startY)+"px";
-}
-
-async function finishCrop(e){
-  if(!isDragging) return;
-  isDragging=false;
-  const rect=cropDiv.getBoundingClientRect();
-  overlay.style.display="none";
-  overlay.innerHTML="";
-
-  // Đợi font + ảnh load xong
-  await document.fonts.ready;
-  const imgs = Array.from(document.images);
-  await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(res=>img.onload=res)));
-
-  // Chuyển ảnh internet sang base64 để Chrome render đúng
-  for(let img of imgs){
-    if(!img.src.startsWith("data:")){
-      try{
-        const resp = await fetch(img.src, {mode:"cors"});
-        const blob = await resp.blob();
-        const reader = new FileReader();
-        reader.onloadend = ()=>{img.src = reader.result;
-          img.alt = img.alt || "Image";
-        };
-        reader.readAsDataURL(blob);
-      }catch(err){ console.warn("Cannot fetch image", img.src); }
+        data.books.slice(0, 6).forEach(book => {
+          const card = document.createElement("div");
+          card.className = "book-card";
+          card.innerHTML = `
+            <img src="${book.cover}" alt="${book.title}">
+            <h3>${book.title}</h3>
+            <p>${book.author}</p>
+            <span class="price">${book.price} VND</span>
+          `;
+          container.appendChild(card);
+        });
+      }
+    } catch (err) {
+      console.error("❌ Error loading books:", err);
     }
   }
 
-  const canvas = await html2canvas(document.body,{
-    x:rect.left, y:rect.top, width:rect.width, height:rect.height,
-    scrollX:0, scrollY:0, useCORS:true, allowTaint:true
-  });
+  window.onload = loadBooks;
+  </script>
+<script>
+  async function loadRecommended() {
+  try {
+    const res = await fetch("/api/recommended");
+    const data = await res.json();
 
-  canvas.toBlob(blob=>{
-    const url=URL.createObjectURL(blob);
-    const img=document.createElement("img");
-    img.src=url;
-    appendMsg("user","",true);
-    chat.lastChild.appendChild(img);
+    if (!data.ok) return;
 
-    const formData=new FormData();
-    formData.append("file", blob, "crop.png");
-    fetch("/api/query",{method:"POST",body:formData})
-      .then(r=>r.json())
-      .then(data=>appendMsg("bot", data.reply || "Crop sent"));
-  });
+    const recList = document.getElementById("recommended-list");
+    recList.innerHTML = "";
 
-  overlay.removeEventListener("mousedown", startCrop);
-  overlay.removeEventListener("mousemove", doCrop);
-  overlay.removeEventListener("mouseup", finishCrop);
+    data.books.forEach(book => {
+      const div = document.createElement("div");
+      div.className = "thumb-card";
+      div.onclick = () => openBookModal(book.title, book.author, book.price, book.cover);
+
+      div.innerHTML = `
+        <img src="${book.cover}" alt="${book.title}">
+      `;
+      recList.appendChild(div);
+    });
+  } catch (err) {
+    console.error("Error loading recommended:", err);
+  }
 }
 
-cropBtn.onclick = ()=>{
-  overlay.style.display="block";
-  overlay.addEventListener("mousedown", startCrop);
-  overlay.addEventListener("mousemove", doCrop);
-  overlay.addEventListener("mouseup", finishCrop);
+document.addEventListener("DOMContentLoaded", loadRecommended);
 
-  const escHandler=e=>{
-    if(e.key==="Escape"){
-      overlay.style.display="none";
-      overlay.innerHTML="";
-      overlay.removeEventListener("mousedown", startCrop);
-      overlay.removeEventListener("mousemove", doCrop);
-      overlay.removeEventListener("mouseup", finishCrop);
-      document.removeEventListener("keydown", escHandler);
-    }
-  };
-  document.addEventListener("keydown", escHandler);
-};
-
-// ------------------------- Book modal -------------------------
-function openBookModal(title, author, price, cover){
-  document.getElementById("modal-title").textContent = title;
-  document.getElementById("modal-author").textContent = author;
-  document.getElementById("modal-price").textContent = price+" VND";
-  document.getElementById("modal-cover").src = cover;
-  document.getElementById("book-modal").style.display = "flex";
-}
-function closeBookModal(){ document.getElementById("book-modal").style.display="none"; }
-
-// ------------------------- Load recommended -------------------------
-async function loadRecommended(){
-  const res = await fetch("{{ url_for('static', filename='data/books.json') }}");
-  const books = await res.json();
-  const randomBooks = books.sort(()=>0.5-Math.random()).slice(0,6);
-  const recList = document.getElementById("recommended-list");
-  recList.innerHTML = "";
-  randomBooks.forEach(book=>{
-    const div = document.createElement("div");
-    div.className = "thumb-card";
-    div.onclick = ()=>openBookModal(book.title, book.author, book.price, book.cover);
-    div.innerHTML = `<img src="${book.cover}" alt="${book.title}">`;
-    recList.appendChild(div);
-  });
-}
-loadRecommended();
 </script>
+
 
 </body>
 </html>

@@ -212,6 +212,83 @@ body {
   text-align: center;
     position: relative;
 }
+/* ===== Add Book Modal ===== */
+.add-book-form {
+  width: 400px;
+  background: #fff;
+  padding: 25px;
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.add-book-form h2 {
+  text-align: center;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.add-book-form .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.add-book-form label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #555;
+}
+
+.add-book-form input[type="text"],
+.add-book-form input[type="number"],
+.add-book-form input[type="file"] {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.add-book-form .cover-preview {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.add-book-form .cover-preview img {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 10px;
+  object-fit: contain;
+  border: 1px solid #eee;
+  padding: 5px;
+  background: #fafafa;
+}
+
+.add-book-form .btn-submit {
+  background: #4a6cf7;
+  color: white;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  cursor: pointer;
+  margin-top: 10px;
+  transition: background 0.3s;
+}
+
+.add-book-form .btn-submit:hover {
+  background: #3754d8;
+}
+
+/* modal animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* Nút đóng */
 .modal-content .close {
@@ -274,24 +351,42 @@ body {
 }
 
 .msg {
-  padding: 10px 14px;
-  border-radius: 15px;
-  margin: 8px 0;
-  max-width: 70%;
-  line-height: 1.4;
-  word-wrap: break-word;
+  display: flex;
+  margin: 6px 0;
+  
 }
 
 .msg.user {
-  background: #f9d423;
-  color: #333;
-  align-self: flex-end;
+  justify-content: flex-end; /* đẩy về bên phải */
 }
 
 .msg.bot {
-  background: #e6eaf5;
-  color: #222;
-  align-self: flex-start;
+  justify-content: flex-start; /* đẩy về bên trái */
+}
+
+.bubble {
+  padding: 10px;
+  max-width: 70%;
+  position: relative;
+  border-radius: 12px;
+}
+
+.msg.user .bubble {
+  background: #ffde99; /* vàng cam nhạt cho user */
+  border-bottom-right-radius: 0;
+}
+
+.msg.bot .bubble {
+  background: #e6e6e6;
+  border-bottom-left-radius: 0;
+}
+
+.time {
+  display: block;
+  font-size: 0.75rem;
+  color: gray;
+  margin-top: 4px;
+  text-align: right;
 }
 
 /* Chat input */
@@ -340,4 +435,27 @@ body {
 
 #send-btn {
   background: #f76b1c; /* cam */
+}
+.confirm-send {
+  margin-top: 6px;
+  padding: 6px 14px;
+  background: linear-gradient(135deg, #ff9800, #ff5722);
+  color: white;
+  border: none;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-block;
+}
+
+.confirm-send:hover {
+  background: linear-gradient(135deg, #ffb74d, #ff7043);
+  transform: scale(1.05);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+
+.confirm-send:active {
+  transform: scale(0.95);
 }
