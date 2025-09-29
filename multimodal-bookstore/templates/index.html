@@ -122,33 +122,53 @@
   <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 
   <script>
-  async function loadBooks() {
-    try {
-      const res = await fetch("/api/books");
-      const data = await res.json();
+ async function loadBooks() {
+  try {
+    const res = await fetch("/api/books");
+    const data = await res.json();
 
-      if (data.ok) {
-        const container = document.getElementById("book-list");
-        container.innerHTML = ""; // clear
+    if (data.ok) {
+      const container = document.getElementById("book-list");
+      container.innerHTML = ""; // clear
 
-        data.books.slice(0, 6).forEach(book => {
-          const card = document.createElement("div");
-          card.className = "book-card";
-          card.innerHTML = `
-            <img src="${book.cover}" alt="${book.title}">
-            <h3>${book.title}</h3>
-            <p>${book.author}</p>
-            <span class="price">${book.price} VND</span>
-          `;
-          container.appendChild(card);
+      data.books.slice(0, 12).forEach(book => {
+        const card = document.createElement("div");
+        card.className = "book-card";
+
+        card.innerHTML = `
+          <img src="${book.cover}" alt="${book.title}">
+          <h3>${book.title}</h3>
+          <p>${book.author}</p>
+          <span class="price">${book.price} VND</span>
+          <button class="delete-btn" data-id="${book._id}">🗑️ Delete</button>
+        `;
+
+        container.appendChild(card);
+      });
+
+      // Gắn event click cho nút delete
+      document.querySelectorAll(".delete-btn").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const id = e.target.getAttribute("data-id");
+          if (!confirm("Bạn có chắc muốn xóa sách này?")) return;
+
+          const res = await fetch("/api/delete-book", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id })
+          });
+
+          const result = await res.json();
+          alert(result.message);
+          if (result.ok) loadBooks(); // refresh list
         });
-      }
-    } catch (err) {
-      console.error("❌ Error loading books:", err);
+      });
     }
+  } catch (err) {
+    console.error("❌ Error loading books:", err);
   }
-
-  window.onload = loadBooks;
+}
+window.onload = loadBooks;
   </script>
 <script>
   async function loadRecommended() {
@@ -157,7 +177,6 @@
     const data = await res.json();
 
     if (!data.ok) return;
-
     const recList = document.getElementById("recommended-list");
     recList.innerHTML = "";
 

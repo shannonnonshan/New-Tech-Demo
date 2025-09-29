@@ -5,3 +5,4 @@ cd multimodal-bookstore
 .\.venv\Scripts\Activate.ps1 
 tesseract --version
 python app.py 
+

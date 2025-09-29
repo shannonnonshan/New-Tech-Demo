@@ -6,3 +6,10 @@ python-dotenv
 flask-pymongo
 chromadb
 sentence-transformers
+torch
+torchvision
+transformers
+safetensors
+accelerate
+ftfy
+regex

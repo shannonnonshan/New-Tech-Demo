@@ -1,3 +1,4 @@
+// ------------------------- Element refs -------------------------
 const sendBtn = document.getElementById("send-btn");
 const input = document.getElementById("user-input");
 const chat = document.getElementById("chat-messages");
@@ -9,10 +10,9 @@ const addBookBtn = document.getElementById("add-book-btn");
 const addBookModal = document.getElementById("add-book-modal");
 const addBookForm = document.getElementById("add-book-form");
 const coverInput = document.getElementById("new-cover");
-const coverPreview = document.getElementById("cover-preview");
-
-// preview ảnh dưới input
+const coverPreviewImg = document.getElementById("cover-preview-img");
 const attachments = document.getElementById("input-attachments");
+
 let attachedFile = null;
 let attachedPreview = null;
 
@@ -27,7 +27,6 @@ function appendMsg(who, content, isHTML = false) {
   div.className = "msg " + who;
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-
   if (isHTML) bubble.innerHTML = content;
   else bubble.textContent = content;
 
@@ -64,52 +63,64 @@ function addAttachment(file, previewURL) {
   };
 }
 
-// ------------------------- Chat -------------------------
-async function sendMessage() {
+// ------------------------- Send message -------------------------
+async function sendMessage(fileToSend = null, b64ToSend = null) {
   const msg = input.value.trim();
-  if (!msg && !attachedFile) return;
+  if (!msg && !fileToSend && !b64ToSend) return;
 
-  // hiển thị bubble user
   let previewHTML = "";
-  if (attachedPreview) {
-    previewHTML = `<img src="${attachedPreview}" style="max-width:150px; border-radius:6px;">`;
-  }
-  appendMsg("user", (previewHTML ? previewHTML + "<br>" : "") + msg, true);
-  input.value = "";
-  attachments.innerHTML = "";
-  attachedFile = null;
-  attachedPreview = null;
+  if (b64ToSend) previewHTML = `<img src="${b64ToSend}" style="max-width:150px; border-radius:6px;"><br>`;
+  else if (fileToSend) previewHTML = `<img src="${URL.createObjectURL(fileToSend)}" style="max-width:150px; border-radius:6px;"><br>`;
+  appendMsg("user", previewHTML + msg, true);
 
-  // gửi API
-  if (attachedFile) {
-    const formData = new FormData();
-    formData.append("file", attachedFile, attachedFile.name || "upload.png");
-    if (msg) formData.append("query", msg);
-    const res = await fetch("/api/query", { method: "POST", body: formData });
-    const data = await res.json();
-    appendMsg("bot", data.reply || "Uploaded");
-  } else {
-    const res = await fetch("/api/text-query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: msg }),
-    });
-    const data = await res.json();
-    appendMsg("bot", data.reply);
+  try {
+    let res, data;
+    if (fileToSend) {
+      const formData = new FormData();
+      formData.append("file", fileToSend, fileToSend.name || "upload.png");
+      if (msg) formData.append("query", msg);
+      res = await fetch("/api/query", { method: "POST", body: formData });
+      data = await res.json();
+    } else if (b64ToSend) {
+      res = await fetch("/api/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: b64ToSend, query: msg })
+      });
+      data = await res.json();
+    } else {
+      res = await fetch("/api/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: msg })
+      });
+      data = await res.json();
+    }
+
+    // Hiển thị bot reply + cover sách nếu có
+    if (data.cover) {
+      appendMsg("bot", `<img src="${data.cover}" style="max-width:150px; border-radius:6px;"><br>${data.reply}`, true);
+    } else {
+      appendMsg("bot", data.reply || "❌ Không có phản hồi");
+    }
+
+  } catch (err) {
+    appendMsg("bot", `⚠️ Lỗi gửi dữ liệu: ${err}`);
   }
 
-  // reset input + attach
+  // Reset input & attachment
   input.value = "";
   attachments.innerHTML = "";
   attachedFile = null;
   attachedPreview = null;
 }
-sendBtn.onclick = sendMessage;
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendMessage();
-});
 
-// ------------------------- Upload file preview -------------------------
+// ------------------------- Send cropped image (preview first) -------------------------
+function previewCrop(b64) {
+  addAttachment(null, b64); // chỉ preview
+}
+
+// ------------------------- File preview -------------------------
 fileInput.onchange = (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -117,7 +128,7 @@ fileInput.onchange = (e) => {
   addAttachment(file, url);
 };
 
-// ------------------------- Screen Crop -------------------------
+// ------------------------- Crop screen -------------------------
 let cropDiv = null, startX = 0, startY = 0, isDragging = false;
 
 function startCrop(e) {
@@ -149,45 +160,16 @@ async function finishCrop(e) {
   isDragging = false;
 
   const rect = cropDiv.getBoundingClientRect();
-
-  // Ẩn overlay để không bị chụp vào ảnh
   overlay.style.display = "none";
   overlay.innerHTML = "";
 
-  // Chờ font + ảnh load xong
-  await document.fonts.ready;
-  const imgs = Array.from(document.images);
-  await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => img.onload = res)));
-
-  // Chuyển ảnh internet sang base64 để html2canvas render đúng
-  for (let img of imgs) {
-    if (!img.src.startsWith("data:")) {
-      try {
-        const resp = await fetch(img.src, { mode: "cors" });
-        const blob = await resp.blob();
-        const reader = new FileReader();
-        reader.onloadend = () => { img.src = reader.result; };
-        reader.readAsDataURL(blob);
-      } catch (err) { console.warn("Cannot fetch image", img.src); }
-    }
-  }
-
-  // Chụp canvas đúng vùng crop
   const canvas = await html2canvas(document.body, {
     x: rect.left, y: rect.top, width: rect.width, height: rect.height,
     scrollX: 0, scrollY: 0, useCORS: true, allowTaint: true, backgroundColor: null
   });
 
-  canvas.toBlob(blob => {
-    const url = URL.createObjectURL(blob);
-    // Thêm vào attachment preview
-    addAttachment(blob, url);
-  });
-
-  // Gỡ sự kiện
-  overlay.removeEventListener("mousedown", startCrop);
-  overlay.removeEventListener("mousemove", doCrop);
-  overlay.removeEventListener("mouseup", finishCrop);
+  const b64 = canvas.toDataURL("image/png");
+  previewCrop(b64); // chỉ preview, không gửi
 }
 
 cropBtn.onclick = () => {
@@ -208,44 +190,29 @@ cropBtn.onclick = () => {
   };
   document.addEventListener("keydown", escHandler);
 };
-// ------------------------- Book modal -------------------------
-function openBookModal(title, author, price, cover) {
-  document.getElementById("modal-title").textContent = title;
-  document.getElementById("modal-author").textContent = author;
-  document.getElementById("modal-price").textContent = price + " VND";
-  document.getElementById("modal-cover").src = cover;
-  document.getElementById("book-modal").style.display = "flex";
-}
-function closeBookModal() {
-  document.getElementById("book-modal").style.display = "none";
-}
-function openAddBookModal() {
-  document.getElementById("add-book-modal").style.display = "flex";
-}
-function closeAddBookModal() {
-  document.getElementById("add-book-modal").style.display = "none";
-}
 
-document.getElementById("new-cover").addEventListener("change", function (e) {
+// ------------------------- Book modal -------------------------
+function openAddBookModal() { addBookModal.style.display = "flex"; }
+function closeAddBookModal() { addBookModal.style.display = "none"; }
+
+coverInput.addEventListener("change", (e) => {
   const file = e.target.files[0];
-  if (file) {
-    const url = URL.createObjectURL(file);
-    const img = document.getElementById("cover-preview-img");
-    img.src = url;
-    img.style.display = "block";
-  }
+  if (file) coverPreviewImg.src = URL.createObjectURL(file);
 });
 
-document.getElementById("add-book-form").addEventListener("submit", async (e) => {
+addBookForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const formData = new FormData(e.target);
   const res = await fetch("/api/add-book", { method: "POST", body: formData });
   const data = await res.json();
   alert(data.message);
-  if (data.ok) {
-    closeAddBookModal();
-    location.reload();
-  }
+  if (data.ok) { closeAddBookModal(); location.reload(); }
 });
+
 addBookBtn.addEventListener("click", openAddBookModal);
 
+// ------------------------- Send button & Enter key -------------------------
+sendBtn.onclick = () => sendMessage(attachedFile, attachedPreview);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendMessage(attachedFile, attachedPreview);
+});
