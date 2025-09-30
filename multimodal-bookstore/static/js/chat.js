@@ -146,8 +146,13 @@ function previewCrop(b64) {
 fileInput.onchange = (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  const url = URL.createObjectURL(file);
-  addAttachment(file, url);
+  
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const b64 = ev.target.result;
+    addAttachment(file, b64); // vừa set attachedFile, vừa preview
+  };
+  reader.readAsDataURL(file);
 };
 
 // ------------------------- Crop screen -------------------------
