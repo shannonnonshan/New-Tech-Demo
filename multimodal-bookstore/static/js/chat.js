@@ -68,10 +68,27 @@ async function sendMessage(fileToSend = null, b64ToSend = null) {
   const msg = input.value.trim();
   if (!msg && !fileToSend && !b64ToSend) return;
 
-  let previewHTML = "";
-  if (b64ToSend) previewHTML = `<img src="${b64ToSend}" style="max-width:150px; border-radius:6px;"><br>`;
-  else if (fileToSend) previewHTML = `<img src="${URL.createObjectURL(fileToSend)}" style="max-width:150px; border-radius:6px;"><br>`;
-  appendMsg("user", previewHTML + msg, true);
+  // --- Append message user trước khi gửi ---
+  let userContent = "";
+  if (b64ToSend) userContent = `<img src="${b64ToSend}" style="max-width:150px; border-radius:6px;"><br>${msg}`;
+  else if (fileToSend) userContent = `<img src="${URL.createObjectURL(fileToSend)}" style="max-width:150px; border-radius:6px;"><br>${msg}`;
+  else userContent = msg;
+  appendMsg("user", userContent, true);
+
+  // --- Xóa input box, giữ attachment preview nếu muốn ---
+  input.value = "";
+
+  // --- Hiển thị AI is thinking ---
+  const thinkingDiv = document.createElement("div");
+  thinkingDiv.className = "msg bot";
+  thinkingDiv.id = "ai-thinking";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = "🤖 AI is thinking...";
+  bubble.style.fontStyle = "italic";
+  thinkingDiv.appendChild(bubble);
+  chat.appendChild(thinkingDiv);
+  chat.scrollTop = chat.scrollHeight;
 
   try {
     let res, data;
@@ -97,19 +114,24 @@ async function sendMessage(fileToSend = null, b64ToSend = null) {
       data = await res.json();
     }
 
-    // Hiển thị bot reply + cover sách nếu có
+    // --- Xóa "AI is thinking..." ---
+    const thinkingNode = document.getElementById("ai-thinking");
+    if (thinkingNode) thinkingNode.remove();
+
+    // --- Hiển thị phản hồi AI, chỉ show cover nếu backend trả về ---
+    let content = data.reply || "";
     if (data.cover) {
-      appendMsg("bot", `<img src="${data.cover}" style="max-width:150px; border-radius:6px;"><br>${data.reply}`, true);
-    } else {
-      appendMsg("bot", data.reply || "❌ Không có phản hồi");
+      content = `<img src="${data.cover}" style="max-width:150px; border-radius:6px;"><br>` + content;
     }
+    appendMsg("bot", content, true);
 
   } catch (err) {
+    const thinkingNode = document.getElementById("ai-thinking");
+    if (thinkingNode) thinkingNode.remove();
     appendMsg("bot", `⚠️ Lỗi gửi dữ liệu: ${err}`);
   }
 
-  // Reset input & attachment
-  input.value = "";
+  // --- Reset attachment preview ---
   attachments.innerHTML = "";
   attachedFile = null;
   attachedPreview = null;
