@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import secrets
 from datetime import timedelta
 from bson import ObjectId
+from difflib import get_close_matches
 
 # ================== CONFIG ==================
 load_dotenv()
@@ -32,7 +33,41 @@ def image_from_base64(data_url):
     else:
         b64 = data_url
     return Image.open(io.BytesIO(base64.b64decode(b64)))
+def find_book_by_title(text_query, books):
+    query_lower = text_query.lower()
 
+    # 1. Regex trực tiếp (không phân biệt hoa thường)
+    book_match = mongo.db.books.find_one({
+        "title": {"$regex": text_query, "$options": "i"}
+    })
+    if book_match:
+        return book_match
+
+    # Chuẩn bị danh sách title (lowercase để fuzzy match)
+    all_titles = [b["title"] for b in books]
+    all_titles_lower = [t.lower() for t in all_titles]
+
+    # 2. Fuzzy match toàn bộ tên
+    close = get_close_matches(query_lower, all_titles_lower, n=1, cutoff=0.6)
+    if close:
+        # tìm lại tên gốc khớp lowercase
+        idx = all_titles_lower.index(close[0])
+        return mongo.db.books.find_one({"title": all_titles[idx]})
+
+    # 3. Fuzzy match từng từ
+    words = query_lower.split()
+    candidates = []
+    for word in words:
+        close_word = get_close_matches(word, all_titles_lower, n=3, cutoff=0.6)
+        candidates.extend(close_word)
+
+    if candidates:
+        # chọn tên xuất hiện nhiều nhất
+        best_guess = max(set(candidates), key=candidates.count)
+        idx = all_titles_lower.index(best_guess)
+        return mongo.db.books.find_one({"title": all_titles[idx]})
+
+    return None
 def make_json_safe(obj):
     if isinstance(obj, dict):
         return {k: make_json_safe(v) for k, v in obj.items()}
@@ -155,10 +190,6 @@ def api_query():
             session_data["last_best_match"] = make_json_safe(book)
             save_session_data(session_data)
 
-    best_match = None
-    covers = []
-    top_matches = []
-
     # ================== 5. Greeting intent ==================
     greetings = ["hi", "hello", "chào", "hey", "xin chào"]
     if text_query.lower() in greetings:
@@ -174,120 +205,170 @@ def api_query():
             "suggested": []
         })
 
-        # ================== 6. Xử lý Text-only ==================
+    # ================== 6. Xử lý Text-only ==================
     if text_query and not pil_img:
         query_lower = text_query.lower()
-        
-        # --- Kiểm tra xem có hỏi "có bán trong tiệm" không ---
-        if "có bán" in query_lower or "tiệm" in query_lower:
+
+        # --- Xử lý xác nhận "có" (mua) ---
+        confirm_words_yes = ["có", "đúng rồi", "ok", "mua", "chuẩn", "phải"]
+        if query_lower in confirm_words_yes:
             last_book = session_data.get("last_best_match")
-            available = []
-            
-            # Check last_best_match
             if last_book:
-                try:
-                    book_in_store = mongo.db.books.find_one({
-                        "_id": ObjectId(last_book["_id"]),
-                        "stock": {"$gt": 0}  # hoặc "available": True
+                book_in_store = mongo.db.books.find_one({"_id": ObjectId(last_book["_id"])})
+                if book_in_store:
+                    book_in_store["_id"] = str(book_in_store["_id"])
+                    reply = f"👍 Trong tiệm có bán '{book_in_store['title']}' của {book_in_store['author']}, giá {book_in_store.get('price', 'chưa có giá')}."
+                    return jsonify({
+                        "ok": True,
+                        "reply": reply,
+                        "cover": book_in_store.get("cover"),
+                        "covers": [book_in_store.get("cover")] if book_in_store.get("cover") else [],
+                        "book": make_json_safe(book_in_store),
+                        "suggested": []
                     })
-                    if book_in_store:
-                        available.append(make_json_safe(book_in_store))
-                except:
-                    pass
-            
-            # Check last_suggested (top 3 gợi ý trước đó)
+            return jsonify({"ok": False, "reply": "Bạn muốn mua sách nào nhỉ? Hãy chọn lại nhé."})
+
+        # --- Xử lý xác nhận "không" ---
+        confirm_words_no = ["không", "không mua", "không phải", "sai", "nhầm"]
+        if query_lower in confirm_words_no:
             last_suggested = session_data.get("last_suggested", [])
-            for b in last_suggested:
-                try:
-                    book_in_store = mongo.db.books.find_one({
-                        "_id": ObjectId(b["_id"]),
-                        "stock": {"$gt": 0}
-                    })
-                    if book_in_store and book_in_store["_id"] not in [a["_id"] for a in available]:
-                        available.append(make_json_safe(book_in_store))
-                except:
-                    continue
+            if last_suggested:
+                reply = "Không sao 😊. Bạn thử xem thêm mấy cuốn này nhé:"
+                return jsonify({
+                    "ok": True,
+                    "reply": reply,
+                    "cover": last_suggested[0].get("cover") if last_suggested[0].get("cover") else None,
+                    "covers": [b.get("cover") for b in last_suggested if b.get("cover")],
+                    "book": None,
+                    "suggested": last_suggested
+                })
+            return jsonify({"ok": True, "reply": "Vậy mình có thể gợi ý vài cuốn khác cho bạn không?"})
 
-            # --- Tạo reply ---
-            if available:
-                reply = "Trong tiệm có bán các cuốn:\n" + "\n".join(f"- {b['title']} của {b['author']}" for b in available)
+        # --- Xử lý hỏi giá ---
+        price_keywords = ["giá", "cost", "bao nhiêu", "mấy tiền", "giá bao nhiêu", "nhiêu"]
+        if any(word in query_lower for word in price_keywords):
+    # Tìm sách gần giống (regex + fuzzy + từ khóa)
+            last_book = session_data.get("last_best_match")
+            book_match = find_book_by_title(text_query, books)
+
+            if book_match:
+                book_match["_id"] = str(book_match["_id"])
+                update_session_if_new_book(book_match)
+                session_data["last_suggested"] = [make_json_safe(book_match)]
+                save_session_data(session_data)
+
+                reply = f"📚 Ý bạn có phải sách '{book_match['title']}' của {book_match.get('author','không rõ tác giả')}? Giá là {book_match.get('price', 'chưa có giá')}."
+                return jsonify({
+                    "ok": True,
+                    "reply": reply,
+                    "cover": book_match.get("cover"),
+                    "covers": [book_match.get("cover")] if book_match.get("cover") else [],
+                    "book": make_json_safe(book_match),
+                    "suggested": [book_match]
+                })
+            elif last_book:
+                # Không nhắc tên mới nhưng đã có sách trước đó => báo giá từ session
+                reply = f"📚 Sách '{last_book['title']}' của {last_book.get('author','không rõ tác giả')} có giá {last_book.get('price','chưa có giá')}."
+                return jsonify({
+                    "ok": True,
+                    "reply": reply,
+                    "cover": last_book.get("cover"),
+                    "covers": [last_book.get("cover")] if last_book.get("cover") else [],
+                    "book": make_json_safe(last_book),
+                    "suggested": [last_book]
+                })
             else:
-                reply = "Hiện không có cuốn nào trong tiệm."
+                return jsonify({
+                    "ok": False,
+                    "reply": "Xin lỗi, mình chưa tìm thấy sách nào gần giống để báo giá."
+                })
 
-            add_to_history("user", text_query)
-            add_to_history("assistant", reply)
+        if "có bán" in query_lower or "có sách" in query_lower or "trong tiệm có" in query_lower:
+            book_match = find_book_by_title(text_query, books)
+            if book_match:
+                book_match["_id"] = str(book_match["_id"])
+                update_session_if_new_book(book_match)
+                reply = f"✅ Trong tiệm có bán '{book_match['title']}' của {book_match.get('author','không rõ tác giả')} với giá {book_match.get('price','chưa có giá')}."
+                return jsonify({
+                    "ok": True,
+                    "reply": reply,
+                    "cover": book_match.get("cover"),
+                    "covers": [book_match.get("cover")] if book_match.get("cover") else [],
+                    "book": make_json_safe(book_match),
+                    "suggested": []
+                })
+            else:
+                suggested = [make_json_safe(b) for b in books[:3]]
+                reply = "❌ Hiện tại trong tiệm không có cuốn này. Bạn có thể tham khảo các sách sau:"
+                return jsonify({
+                    "ok": True,
+                    "reply": reply,
+                    "cover": suggested[0].get("cover") if suggested and suggested[0].get("cover") else None,
+                    "covers": [b.get("cover") for b in suggested if b.get("cover")],
+                    "book": None,
+                    "suggested": suggested
+                })
+
+
+    
+        
+
+        # --- 1. Regex match trực tiếp ---
+        book_match = find_book_by_title(text_query, books)
+
+
+        # Nếu không tìm thấy, thử fuzzy match
+        if not book_match:
+            all_titles = [b["title"] for b in books]
+            close = get_close_matches(text_query, all_titles, n=1, cutoff=0.6)  # 0.6 là ngưỡng similarity
+            if close:
+                book_match = mongo.db.books.find_one({"title": close[0]})
+
+        # --- 3. Nếu tìm được match (regex hoặc fuzzy) ---
+        if book_match:
+            book_match["_id"] = str(book_match["_id"])
+            update_session_if_new_book(book_match)
+            session_data["last_suggested"] = [make_json_safe(book_match)]
+            save_session_data(session_data)
 
             return jsonify({
                 "ok": True,
-                "reply": reply,
-                "cover": available[0]["cover"] if available and "cover" in available[0] else None,
-                "covers": [b.get("cover") for b in available if "cover" in b],
-                "book": available[0] if available else None,
-                "suggested": available
+                "reply": f"Mình tìm thấy sách gần giống với '{text_query}': '{book_match['title']}' của {book_match.get('author', 'không rõ tác giả')}. Bạn có muốn mua không?",
+                "cover": book_match.get("cover"),
+                "covers": [book_match.get("cover")] if book_match.get("cover") else [],
+                "book": make_json_safe(book_match),
+                "suggested": [book_match]
             })
+        
 
-        # --- Nếu không phải hỏi "có bán" thì gọi CLIP bình thường ---
+        # --- Nếu không match thì gọi CLIP ---
         try:
-            color_map = {
-                "đỏ": "red", "xanh": "blue", "vàng": "yellow",
-                "trắng": "white", "đen": "black", "cam": "orange",
-                "tím": "purple", "hồng": "pink", "nâu": "brown",
-                "xám": "gray"
-            }
-            object_map = {
-                "người": "person", "con người": "person",
-                "động vật": "animal", "vật nuôi": "animal"
-            }
-
-            use_clip_text_only = any(k in query_lower for k in color_map) or any(k in query_lower for k in object_map)
-
-            if use_clip_text_only:
-                resp = requests.post(
-                    f"{CLIP_API_URL}/clip-match-text",
-                    json={"query": text_query},
-                    timeout=60
-                ).json()
-            else:
-                resp = requests.post(
-                    f"{CLIP_API_URL}/clip-match-multimodal-text",
-                    json={"query": text_query, "books": books},
-                    timeout=60
-                ).json()
-
+            resp = requests.post(
+                f"{CLIP_API_URL}/clip-match-multimodal-text",
+                json={"query": text_query, "books": books},
+                timeout=60
+            ).json()
             top_matches = resp.get("matches", [])
         except Exception as e:
             print(f"⚠️ Lỗi khi gọi CLIP API: {e}")
             top_matches = []
-
-        # --- Cập nhật session ---
+        
         if top_matches:
             best_match = top_matches[0]
             update_session_if_new_book(best_match)
-            covers = [m.get("cover") for m in top_matches[:3] if m.get("cover")]
-            session_data["last_suggested"] = [make_json_safe(m) for m in top_matches[:3]]
+            session_data["last_suggested"] = [make_json_safe(best_match)]
             save_session_data(session_data)
 
-        add_to_history("user", text_query)
-        add_to_history("system",
-            f"Người dùng hỏi: '{text_query}'. "
-            f"Cuốn sách phù hợp: '{best_match.get('title')}' của {best_match.get('author')}" if top_matches else "Hiện chưa có sách phù hợp."
-        )
+            return jsonify({
+                "ok": True,
+                "reply": f"BooksLand có cuốn '{best_match['title']}' của {best_match['author']}. Bạn có muốn mua không?",
+                "cover": best_match.get("cover"),
+                "covers": [best_match.get("cover")] if best_match.get("cover") else [],
+                "book": make_json_safe(best_match),
+                "suggested": [best_match]
+            })
 
-        # --- Gọi GPT ---
-        try:
-            gpt_res = call_openrouter(get_session_history())
-            gpt_reply = gpt_res["choices"][0]["message"]["content"]
-        except Exception as e:
-            gpt_reply = f"⚠️ Lỗi GPT: {e}"
-
-        return jsonify({
-            "ok": True,
-            "reply": gpt_reply,
-            "cover": covers[0] if covers else None,
-            "covers": covers,
-            "book": make_json_safe(best_match) if top_matches else None,
-            "suggested": top_matches[:3]
-        })
+        return jsonify({"ok": False, "reply": "Hiện chưa có sách phù hợp."})
 
     # ================== 7. Xử lý Image / Both ==================
     if pil_img:
@@ -302,45 +383,23 @@ def api_query():
 
             resp = requests.post(f"{CLIP_API_URL}/clip-match", json=payload, timeout=60).json()
             top_matches = resp.get("matches", [])
-
         except Exception as e:
             print(f"⚠️ Lỗi khi gọi CLIP API: {e}")
             top_matches = []
 
-        add_to_history("user", text_query if text_query else "<Ảnh bìa sách>")
-
         if top_matches:
-            # Có match → trả 1 match chính xác
             best_match = top_matches[0]
             update_session_if_new_book(best_match)
-            cover = best_match.get("cover")
-            suggested = [make_json_safe(best_match)]
+            return jsonify({
+                "ok": True,
+                "reply": f"Đây có phải là sách '{best_match['title']}' của {best_match['author']} không?",
+                "cover": best_match.get("cover"),
+                "covers": [best_match.get("cover")] if best_match.get("cover") else [],
+                "book": make_json_safe(best_match),
+                "suggested": [best_match]
+            })
         else:
-            # Không match → trả 3 cuốn gợi ý từ DB, không dùng last_best_match
-            suggested = [make_json_safe(b) for b in books[:3]]
-            best_match = None
-            cover = None
-
-        add_to_history("system",
-            f"Người dùng gửi {'ảnh bìa và query' if text_query else 'ảnh bìa'}. "
-            f"{'Cuốn sách được nhận dạng: ' + best_match.get('title') if best_match else 'Hiện chưa có sách phù hợp, gợi ý 3 cuốn khác.'}"
-        )
-
-        try:
-            gpt_res = call_openrouter(get_session_history())
-            gpt_reply = gpt_res["choices"][0]["message"]["content"]
-        except Exception as e:
-            gpt_reply = f"⚠️ Lỗi GPT: {e}"
-
-        return jsonify({
-            "ok": True,
-            "reply": gpt_reply,
-            "cover": cover,
-            "covers": [b["cover"] for b in suggested if b.get("cover")],
-            "book": make_json_safe(best_match) if best_match else None,
-            "suggested": suggested
-        })
-
+            return jsonify({"ok": False, "reply": "Không nhận diện được sách từ ảnh."})
 
     # ================== 8. Fallback ==================
     return jsonify({
