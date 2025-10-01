@@ -120,9 +120,28 @@ async function sendMessage(fileToSend = null, b64ToSend = null) {
 
     // --- Hiển thị phản hồi AI, chỉ show cover nếu backend trả về ---
     let content = data.reply || "";
-    if (data.cover) {
+
+    // Nếu backend trả mảng covers
+    if (data.covers && Array.isArray(data.covers)) {
+        const coversHTML = `
+          <div style="
+            display:flex;
+            gap:6px;
+            flex-wrap: wrap;
+            align-items:center;
+          ">
+            ${data.covers.map(url =>
+              `<img src="${url}" style="width:120px; height:160px; object-fit:cover; border-radius:6px;">`
+            ).join("")}
+          </div>
+        `;
+        content = coversHTML + "<br>" + content;
+      }
+    // Nếu vẫn trả 1 cover cũ (legacy)
+    else if (data.cover) {
       content = `<img src="${data.cover}" style="max-width:150px; border-radius:6px;"><br>` + content;
     }
+
     appendMsg("bot", content, true);
 
   } catch (err) {
