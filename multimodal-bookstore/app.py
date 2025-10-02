@@ -28,6 +28,7 @@ mongo = PyMongo(app)
 
 # ================== UTILS ==================
 def image_from_base64(data_url):
+    """Giải mã chuỗi base64 thành đối tượng PIL Image."""
     if "," in data_url:
         _, b64 = data_url.split(",", 1)
     else:
@@ -35,9 +36,16 @@ def image_from_base64(data_url):
     return Image.open(io.BytesIO(base64.b64decode(b64)))
     
 def find_book_by_title(text_query, books):
+    """
+    Tìm sách bằng tiêu đề sử dụng 3 chiến lược:
+    1. Regex (không phân biệt hoa thường)
+    2. Fuzzy match toàn bộ tiêu đề
+    3. Fuzzy match từng từ trong truy vấn
+    """
     query_lower = text_query.lower()
 
     # 1. Regex trực tiếp (không phân biệt hoa thường)
+    # Tìm kiếm trong DB, không phải trong list books đã load.
     book_match = mongo.db.books.find_one({
         "title": {"$regex": text_query, "$options": "i"}
     })
@@ -71,6 +79,7 @@ def find_book_by_title(text_query, books):
     return None
     
 def make_json_safe(obj):
+    """Chuyển đổi các đối tượng không an toàn cho JSON (như ObjectId) thành chuỗi."""
     if isinstance(obj, dict):
         return {k: make_json_safe(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -81,17 +90,21 @@ def make_json_safe(obj):
         return str(obj)
 
 def get_session_data():
+    """Lấy dữ liệu phiên (session data)."""
     if "data" not in session:
         session["data"] = {}
     return session["data"]
 
 def save_session_data(data):
+    """Lưu dữ liệu vào phiên."""
     session["data"] = data
 
 def clear_session_data():
-    session.clear()  # Xóa toàn bộ session
+    """Xóa toàn bộ session."""
+    session.clear()
 
 def get_session_history():
+    """Lấy lịch sử hội thoại, khởi tạo nếu chưa có."""
     if "history" not in session:
         session["history"] = [
             {
@@ -105,11 +118,13 @@ def get_session_history():
     return session["history"]
 
 def add_to_history(role, content):
+    """Thêm tin nhắn vào lịch sử hội thoại."""
     history = get_session_history()
     history.append({"role": role, "content": content})
     session["history"] = history
 
 def call_openrouter(messages):
+    """Gọi API OpenRouter (sử dụng GPT-4o-mini)."""
     if not OPENROUTER_API_KEY:
         raise Exception("⚠️ Chưa có OPENROUTER_API_KEY trong .env")
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -124,7 +139,7 @@ def call_openrouter(messages):
 
 def generate_llm_reply_for_book(intent, book_data, session_history):
     """
-    Sử dụng LLM để tạo ra phản hồi thân thiện, tự nhiên.
+    Sử dụng LLM để tạo ra phản hồi thân thiện, tự nhiên dựa trên ngữ cảnh.
     :param intent: Mục đích của người dùng ('price', 'in_stock', 'general_info').
     :param book_data: Dữ liệu cuốn sách được tìm thấy.
     :param session_history: Lịch sử hội thoại (để LLM hiểu ngữ cảnh).
@@ -156,7 +171,8 @@ def generate_llm_reply_for_book(intent, book_data, session_history):
     elif intent == 'in_stock':
         instruction = f"Người dùng hỏi tiệm có sách '{book_title}' không. Dựa trên thông tin SÁCH ĐƯỢC TÌM THẤY, hãy xác nhận sách có sẵn, **giới thiệu sơ lược về sách (tác giả, nội dung tóm tắt)** và hỏi lại xem họ có muốn mua không."
     elif intent == 'general_info':
-        instruction = f"Người dùng tìm kiếm hoặc hỏi thông tin chung về sách '{book_title}'. Dựa trên thông tin SÁCH ĐƯỢC TÌM THẤY, hãy tóm tắt ngắn gọn nội dung và hỏi khách có muốn mua không. Bắt đầu bằng câu hỏi xác nhận: 'Có phải bạn đang tìm cuốn...'."
+        # Yêu cầu rõ ràng bắt đầu bằng câu xác nhận (như yêu cầu của bạn)
+        instruction = f"Người dùng tìm kiếm hoặc hỏi thông tin chung về sách '{book_title}'. Dựa trên thông tin SÁCH ĐƯỢC TÌM THẤY, hãy tóm tắt ngắn gọn nội dung và hỏi khách có muốn mua không. **Bắt đầu bằng câu hỏi xác nhận: 'Có phải bạn đang tìm cuốn...'**."
     else:
         instruction = f"Người dùng vừa gửi truy vấn: '{user_request}'. Dựa trên thông tin SÁCH ĐƯỢC TÌM THẤY, hãy tạo ra một phản hồi thân thiện, giàu thông tin và phù hợp với ngữ cảnh."
 
@@ -168,7 +184,6 @@ def generate_llm_reply_for_book(intent, book_data, session_history):
     ]
     
     # Thêm lịch sử (tối đa 3 lần tương tác gần nhất) để LLM giữ ngữ cảnh
-    # Lấy 3 tin nhắn cuối (loại trừ system prompt và tin nhắn hiện tại)
     for msg in session_history[-4:-1]: 
         llm_messages.append(msg)
 
@@ -183,10 +198,12 @@ def generate_llm_reply_for_book(intent, book_data, session_history):
         elif intent == 'in_stock':
             return f"✅ Có ạ. Trong tiệm có bán '{book_title}' của {book_author}, nói về {book_description[:50]}... Bạn có muốn mua không?"
         else:
+            # Fallback cho general_info
             return f"Có phải bạn đang tìm cuốn sách tựa đề '{book_title}' của {book_author}? Bạn có muốn mua không?"
 
 # ================== PUSH BOOKS TO CLIP ==================
 def push_books_to_clip():
+    """Gửi toàn bộ dữ liệu sách lên CLIP API để tạo embedding phục vụ tìm kiếm."""
     if not CLIP_API_URL:
         print("⚠️ Chưa cấu hình CLIP_API_URL, bỏ qua push sách")
         return
@@ -197,11 +214,10 @@ def push_books_to_clip():
             print("⚠️ Mongo chưa có sách, bỏ qua push sách lên CLIP")
             return
             
-        # Tải lại toàn bộ dữ liệu sách để gửi lên CLIP (do CLIP API cần nhiều metadata)
+        # Tải lại toàn bộ dữ liệu sách để gửi lên CLIP
         full_books = list(mongo.db.books.find())
         for book in full_books:
             book["_id"] = str(book["_id"])
-            # CLIP API sẽ tự tính toán UUID (clip_id)
             
         resp = requests.post(CLIP_API_URL + "/clip-match-text",
                              json={"query": "dummy", "books": full_books}, timeout=120)
@@ -452,6 +468,7 @@ def api_query():
         # === END: XỬ LÝ GỢI Ý SÁCH THEO MÀU BÌA ===
 
         # --- Xử lý tìm kiếm chung (Regex + Fuzzy) ---
+        # Đây là khối xử lý khi người dùng chỉ nhập tên sách (ví dụ: "harry potter")
         book_match = find_book_by_title(text_query, books)
 
         if book_match:
@@ -462,7 +479,7 @@ def api_query():
             session_data["last_suggested"] = [make_json_safe(book_match)]
             save_session_data(session_data)
             
-            # Gọi LLM để tạo câu trả lời xác nhận và giới thiệu
+            # Gọi LLM với intent 'general_info' để tạo câu trả lời xác nhận
             reply = generate_llm_reply_for_book("general_info", book_match, get_session_history())
             add_to_history("assistant", reply)
 
@@ -475,7 +492,7 @@ def api_query():
                 "suggested": [book_match]
             })
         
-        # --- Nếu không match thì gọi CLIP (Text-based Semantic Search) ---
+        # --- Nếu không match bằng regex/fuzzy thì gọi CLIP (Text-based Semantic Search) ---
         try:
             resp = requests.post(
                 f"{CLIP_API_URL}/clip-match-multimodal-text",
@@ -495,7 +512,7 @@ def api_query():
             session_data["last_suggested"] = [make_json_safe(best_match)]
             save_session_data(session_data)
             
-            # Gọi LLM để tạo câu trả lời xác nhận và giới thiệu dựa trên CLIP match
+            # Gọi LLM với intent 'general_info' để tạo câu trả lời xác nhận
             reply = generate_llm_reply_for_book("general_info", best_match, get_session_history())
             add_to_history("assistant", reply)
 
@@ -573,10 +590,12 @@ def api_query():
 
 @app.route("/debug-session")
 def debug_session():
+    """Endpoint để kiểm tra session (chỉ dùng khi debug)."""
     return jsonify({"session": dict(session)})
     
 @app.route("/api/session/clear", methods=["POST"])
-def clear_session():
+def clear_session_api():
+    """API để xóa session."""
     clear_session_data()
     resp = jsonify({"ok": True, "msg": "Session đã được reset."})
     resp.set_cookie("session", "", expires=0)  # xoá cookie session
@@ -584,12 +603,14 @@ def clear_session():
 
 @app.route("/")
 def index():
+    """Trang chủ, xóa session khi load."""
     session.clear()
     books = list(mongo.db.books.find())
     return render_template("index.html", books=books)
 
 @app.route("/api/books", methods=["GET"])
 def get_books():
+    """Lấy danh sách toàn bộ sách."""
     books = list(mongo.db.books.find())
     for book in books:
         book["_id"] = str(book["_id"])
@@ -597,6 +618,7 @@ def get_books():
 
 @app.route("/api/recommended", methods=["GET"])
 def get_recommended():
+    """Lấy danh sách sách gợi ý ngẫu nhiên."""
     books = list(mongo.db.books.find())
     recommended = random.sample(books, min(6, len(books)))
     for book in recommended:
