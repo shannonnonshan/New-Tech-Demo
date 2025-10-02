@@ -237,6 +237,7 @@ push_books_to_clip()
 def api_query():
     pil_img = None
     text_query = ""
+    top_matches = []   # ✅ luôn khai báo trước để tránh lỗi
 
     # ================== 0. Nhận input ==================
     if request.is_json:
@@ -285,214 +286,177 @@ def api_query():
         reply = "Chào bạn 👋! Mình là trợ lý BooksLand, có thể giúp bạn tìm sách hoặc giới thiệu sản phẩm."
         add_to_history("assistant", reply)
         return jsonify({
-            "ok": True,
-            "reply": reply,
-            "cover": None,
-            "covers": [],
-            "book": None,
-            "suggested": []
+            "ok": True, "reply": reply,
+            "cover": None, "covers": [], "book": None, "suggested": []
         })
 
     # ================== 6. Xử lý Text-only ==================
     if text_query and not pil_img:
         query_lower = text_query.lower()
 
-        # --- Xử lý xác nhận "có" (mua/xác nhận) ---
+        # --- Xác nhận "có" ---
         confirm_words_yes = ["có", "đúng rồi", "ok", "mua", "chuẩn", "phải"]
         if query_lower in confirm_words_yes:
             last_book = session_data.get("last_best_match")
             if last_book:
-                book_in_store = mongo.db.books.find_one({"_id": ObjectId(last_book["_id"])})
+                book_in_store = find_book_by_title(text_query, books)
                 if book_in_store:
                     book_in_store["_id"] = str(book_in_store["_id"])
-                    
-                    # LLM tạo phản hồi xác nhận mua (hoặc thông tin)
                     add_to_history("user", text_query)
-                    # Giả định đây là xác nhận thông tin chung hoặc sẵn sàng mua
                     llm_reply = generate_llm_reply_for_book("in_stock", book_in_store, get_session_history()) 
                     add_to_history("assistant", llm_reply)
-                    
                     return jsonify({
-                        "ok": True,
-                        "reply": llm_reply,
+                        "ok": True, "reply": llm_reply,
                         "cover": book_in_store.get("cover"),
                         "covers": [book_in_store.get("cover")] if book_in_store.get("cover") else [],
-                        "book": make_json_safe(book_in_store),
-                        "suggested": []
+                        "book": make_json_safe(book_in_store), "suggested": []
                     })
             return jsonify({"ok": False, "reply": "Bạn muốn mua sách nào nhỉ? Hãy chọn lại nhé."})
 
-        # --- Xử lý xác nhận "không" (bỏ qua/từ chối) ---
-        confirm_words_no = ["không", "không mua", "không phải", "sai", "nhầm"]
+        # --- Xác nhận "không" ---
+        confirm_words_no = ["không", "không mua", "không nha", "không nhe", "không phải", "sai", "nhầm"]
         if query_lower in confirm_words_no:
-            last_suggested = session_data.get("last_suggested", [])
-            reply = ""
-            if last_suggested:
-                reply = "Không sao 😊. Bạn thử xem thêm mấy cuốn này nhé:"
-            else:
-                reply = "Vậy mình có thể gợi ý vài cuốn khác cho bạn không?"
-            
+            # Lấy random 3 cuốn trong DB
+            random_books = list(mongo.db.books.aggregate([{"$sample": {"size": 3}}]))
+            for b in random_books:
+                b["_id"] = str(b["_id"])  # convert ObjectId -> str để JSON safe
+
+            reply = "Không sao 😊. Bạn thử xem thêm mấy cuốn này nhé."
+
+            # Update session
+            session_data["last_suggested"] = [make_json_safe(b) for b in random_books]
+            save_session_data(session_data)
+
+            # Update history
             add_to_history("user", text_query)
             add_to_history("assistant", reply)
-            
+
             return jsonify({
                 "ok": True,
                 "reply": reply,
-                "cover": last_suggested[0].get("cover") if last_suggested and last_suggested[0].get("cover") else None,
-                "covers": [b.get("cover") for b in last_suggested if b.get("cover")],
+                "cover": random_books[0].get("cover") if random_books else None,
+                "covers": [b.get("cover") for b in random_books if b.get("cover")],
                 "book": None,
-                "suggested": last_suggested
+                "suggested": random_books
             })
 
-        # --- Xử lý hỏi giá ---
+        # --- Hỏi giá ---
         price_keywords = ["giá", "cost", "bao nhiêu", "mấy tiền", "giá bao nhiêu", "nhiêu"]
         if any(word in query_lower for word in price_keywords):
-            add_to_history("user", text_query) # Thêm vào lịch sử trước khi gọi LLM
-            
+            add_to_history("user", text_query)
             last_book = session_data.get("last_best_match")
             book_match = find_book_by_title(text_query, books)
-
             if book_match:
                 book_match["_id"] = str(book_match["_id"])
                 update_session_if_new_book(book_match)
                 session_data["last_suggested"] = [make_json_safe(book_match)]
                 save_session_data(session_data)
-                
-                # Gọi LLM để tạo câu trả lời tự nhiên
                 reply = generate_llm_reply_for_book("price", book_match, get_session_history())
-                add_to_history("assistant", reply) # Lưu phản hồi LLM vào lịch sử
-
+                add_to_history("assistant", reply)
                 return jsonify({
-                    "ok": True,
-                    "reply": reply,
+                    "ok": True, "reply": reply,
                     "cover": book_match.get("cover"),
                     "covers": [book_match.get("cover")] if book_match.get("cover") else [],
-                    "book": make_json_safe(book_match),
-                    "suggested": [book_match]
+                    "book": make_json_safe(book_match), "suggested": [book_match]
                 })
             elif last_book:
-                # Không nhắc tên mới nhưng đã có sách trước đó => báo giá từ session
                 reply = generate_llm_reply_for_book("price", last_book, get_session_history())
                 add_to_history("assistant", reply)
-
                 return jsonify({
-                    "ok": True,
-                    "reply": reply,
+                    "ok": True, "reply": reply,
                     "cover": last_book.get("cover"),
                     "covers": [last_book.get("cover")] if last_book.get("cover") else [],
-                    "book": make_json_safe(last_book),
-                    "suggested": [last_book]
+                    "book": make_json_safe(last_book), "suggested": [last_book]
                 })
             else:
                 reply = "Xin lỗi, mình chưa tìm thấy sách nào gần giống để báo giá."
                 add_to_history("assistant", reply)
-                return jsonify({
-                    "ok": False,
-                    "reply": reply
-                })
+                return jsonify({"ok": False, "reply": reply})
 
-        # --- Xử lý hỏi có bán không ---
+        # --- Hỏi có bán không ---
         if "có bán" in query_lower or "có sách" in query_lower or "trong tiệm có" in query_lower:
             add_to_history("user", text_query)
-
             book_match = find_book_by_title(text_query, books)
             if book_match:
                 book_match["_id"] = str(book_match["_id"])
                 update_session_if_new_book(book_match)
-                
-                # Gọi LLM để tạo câu trả lời xác nhận và giới thiệu sơ lược
                 reply = generate_llm_reply_for_book("in_stock", book_match, get_session_history())
                 add_to_history("assistant", reply)
-
                 return jsonify({
-                    "ok": True,
-                    "reply": reply,
+                    "ok": True, "reply": reply,
                     "cover": book_match.get("cover"),
                     "covers": [book_match.get("cover")] if book_match.get("cover") else [],
-                    "book": make_json_safe(book_match),
-                    "suggested": []
+                    "book": make_json_safe(book_match), "suggested": []
                 })
-            # Nếu không tìm thấy bằng regex, sẽ chuyển xuống tìm kiếm chung
 
-        # === START: XỬ LÝ GỢI Ý SÁCH THEO MÀU BÌA (Mới) ===
-        color_keywords_vi = ["màu đỏ", "màu xanh", "màu vàng", "màu trắng", "màu đen", 
-                             "màu cam", "màu tím", "màu hồng", "màu nâu", "màu xám",
-                             "bìa đỏ", "bìa xanh", "bìa vàng", "bìa trắng", "bìa đen"]
-        
-        # Kiểm tra nếu query có chứa từ khóa màu sắc
-        if any(kw in query_lower for kw in color_keywords_vi):
+        # --- Tìm theo màu bìa ---
+        color_map = {
+            "màu đỏ": "red", "bìa đỏ": "red",
+            "màu xanh": "blue", "bìa xanh": "blue",
+            "màu vàng": "yellow", "bìa vàng": "yellow",
+            "màu trắng": "white", "bìa trắng": "white",
+            "màu đen": "black", "bìa đen": "black",
+            "màu cam": "orange", "màu tím": "purple",
+            "màu hồng": "pink", "màu nâu": "brown",
+            "màu xám": "gray"
+        }
+        detected_color = None
+        for kw, eng in color_map.items():
+            if kw in query_lower:
+                detected_color = eng
+                break
+
+        if detected_color:
             add_to_history("user", text_query)
             try:
-                # Gọi API mới: /clip-match-color-multimodal
-                print(f"-> Gọi CLIP API theo màu sắc: {text_query}")
+                print(f"-> Gọi CLIP API theo màu sắc: {detected_color}")
                 resp = requests.post(
-                    f"{CLIP_API_URL}/clip-match-color-multimodal",
-                    json={"query": text_query},
+                    f"{CLIP_API_URL}/clip-match-color",
+                    json={"color": detected_color},
                     timeout=60
                 ).json()
                 top_matches = resp.get("suggested", [])
-                detected_color = resp.get("detected_color")
+            except Exception as e:
+                print(f"⚠️ Lỗi khi gọi CLIP API Color Search: {e}")
+                top_matches = []
 
-                if top_matches:
-                    best_match = top_matches[0]
-                    update_session_if_new_book(best_match)
-                    session_data["last_suggested"] = [make_json_safe(b) for b in top_matches]
-                    save_session_data(session_data)
-                    
-                    # Tạo phản hồi cố định cho danh sách sách
-                    book_list_str = "\n".join([f"- **{b['title']}** ({b['author']})" for b in top_matches])
-                    color_name = detected_color if detected_color else "bìa"
-                    reply = f"Dựa trên yêu cầu tìm kiếm sách bìa **{color_name}** của bạn, BooksLand tìm được các cuốn sau:\n{book_list_str}\n\nBạn có muốn mình giới thiệu chi tiết cuốn nào không?"
-
-                    add_to_history("assistant", reply)
-
-                    return jsonify({
-                        "ok": True,
-                        "reply": reply,
-                        "cover": best_match.get("cover"),
-                        "covers": [b.get("cover") for b in top_matches if b.get("cover")],
-                        "book": make_json_safe(best_match),
-                        "suggested": top_matches
-                    })
-                
-                # Nếu không tìm thấy sách nào theo màu
-                reply = "Xin lỗi, mình đã thử tìm sách theo màu bìa nhưng chưa thấy cuốn nào phù hợp. Bạn thử tìm theo tên sách hoặc thể loại nhé."
+            if top_matches:
+                best_match = top_matches[0]
+                update_session_if_new_book(best_match)
+                session_data["last_suggested"] = [make_json_safe(b) for b in top_matches]
+                save_session_data(session_data)
+                book_list_str = "\n".join([f"- **{b['title']}** ({b['author']})" for b in top_matches])
+                reply = f"Dựa trên yêu cầu tìm sách bìa **{detected_color}**, BooksLand gợi ý:\n{book_list_str}\n\nBạn muốn mình giới thiệu chi tiết cuốn nào không?"
+                add_to_history("assistant", reply)
+                return jsonify({
+                    "ok": True, "reply": reply,
+                    "cover": best_match.get("cover"),
+                    "covers": [b.get("cover") for b in top_matches if b.get("cover")],
+                    "book": make_json_safe(best_match),
+                    "suggested": top_matches, "detected_color": detected_color
+                })
+            else:
+                reply = f"Xin lỗi, chưa tìm thấy sách bìa **{detected_color}**."
                 add_to_history("assistant", reply)
                 return jsonify({"ok": False, "reply": reply})
 
-            except Exception as e:
-                print(f"⚠️ Lỗi khi gọi CLIP API Color Search: {e}")
-                # Fallback về tìm kiếm chung bên dưới nếu API lỗi
-                pass 
-        
-        # === END: XỬ LÝ GỢI Ý SÁCH THEO MÀU BÌA ===
-
-        # --- Xử lý tìm kiếm chung (Regex + Fuzzy) ---
-        # Đây là khối xử lý khi người dùng chỉ nhập tên sách (ví dụ: "harry potter")
+        # --- Tìm kiếm chung ---
         book_match = find_book_by_title(text_query, books)
-
         if book_match:
             add_to_history("user", text_query)
-
             book_match["_id"] = str(book_match["_id"])
             update_session_if_new_book(book_match)
             session_data["last_suggested"] = [make_json_safe(book_match)]
             save_session_data(session_data)
-            
-            # Gọi LLM với intent 'general_info' để tạo câu trả lời xác nhận
             reply = generate_llm_reply_for_book("general_info", book_match, get_session_history())
             add_to_history("assistant", reply)
-
             return jsonify({
-                "ok": True,
-                "reply": reply,
+                "ok": True, "reply": reply,
                 "cover": book_match.get("cover"),
                 "covers": [book_match.get("cover")] if book_match.get("cover") else [],
-                "book": make_json_safe(book_match),
-                "suggested": [book_match]
+                "book": make_json_safe(book_match), "suggested": [book_match]
             })
-        
-        # --- Nếu không match bằng regex/fuzzy thì gọi CLIP (Text-based Semantic Search) ---
+
         try:
             resp = requests.post(
                 f"{CLIP_API_URL}/clip-match-multimodal-text",
@@ -503,26 +467,20 @@ def api_query():
         except Exception as e:
             print(f"⚠️ Lỗi khi gọi CLIP API Multimodal Search: {e}")
             top_matches = []
-        
+
         if top_matches:
             add_to_history("user", text_query)
-
             best_match = top_matches[0]
             update_session_if_new_book(best_match)
             session_data["last_suggested"] = [make_json_safe(best_match)]
             save_session_data(session_data)
-            
-            # Gọi LLM với intent 'general_info' để tạo câu trả lời xác nhận
             reply = generate_llm_reply_for_book("general_info", best_match, get_session_history())
             add_to_history("assistant", reply)
-
             return jsonify({
-                "ok": True,
-                "reply": reply,
+                "ok": True, "reply": reply,
                 "cover": best_match.get("cover"),
                 "covers": [best_match.get("cover")] if best_match.get("cover") else [],
-                "book": make_json_safe(best_match),
-                "suggested": [best_match]
+                "book": make_json_safe(best_match), "suggested": [best_match]
             })
 
         reply = "Hiện chưa có sách phù hợp."
@@ -532,7 +490,6 @@ def api_query():
 
     # ================== 7. Xử lý Image / Both ==================
     if pil_img:
-        # Xử lý input ảnh
         try:
             payload = {"books": books}
             buffered = io.BytesIO()
@@ -541,7 +498,6 @@ def api_query():
             payload["image"] = img_b64
             if text_query:
                 payload["query"] = text_query
-                
             resp = requests.post(f"{CLIP_API_URL}/clip-match", json=payload, timeout=60).json()
             top_matches = resp.get("matches", [])
         except Exception as e:
@@ -551,21 +507,14 @@ def api_query():
         if top_matches:
             best_match = top_matches[0]
             update_session_if_new_book(best_match)
-            
-            # Thêm tin nhắn vào lịch sử (dù là ảnh)
             add_to_history("user", f"[IMAGE] {text_query if text_query else '(Tìm sách qua ảnh)'}")
-
-            # LLM tạo phản hồi xác nhận cho kết quả tìm kiếm qua ảnh
             reply = generate_llm_reply_for_book("general_info", best_match, get_session_history())
             add_to_history("assistant", reply)
-            
             return jsonify({
-                "ok": True,
-                "reply": reply,
+                "ok": True, "reply": reply,
                 "cover": best_match.get("cover"),
                 "covers": [best_match.get("cover")] if best_match.get("cover") else [],
-                "book": make_json_safe(best_match),
-                "suggested": [best_match]
+                "book": make_json_safe(best_match), "suggested": [best_match]
             })
         else:
             reply = "Không nhận diện được sách từ ảnh."
@@ -578,12 +527,8 @@ def api_query():
     add_to_history("user", text_query)
     add_to_history("assistant", reply)
     return jsonify({
-        "ok": False,
-        "reply": reply,
-        "cover": None,
-        "covers": [],
-        "book": None,
-        "suggested": []
+        "ok": False, "reply": reply,
+        "cover": None, "covers": [], "book": None, "suggested": []
     })
 
 # ================== API CLEAR SESSION ==================
