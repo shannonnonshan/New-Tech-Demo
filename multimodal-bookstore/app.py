@@ -563,30 +563,57 @@ def api_query():
             payload["image"] = img_b64
             if text_query:
                 payload["query"] = text_query
-            resp = requests.post(f"{CLIP_API_URL}/clip-match-book", json=payload, timeout=60).json()
-            all_matches = resp.get("matches", [])   # list các crop
-            print(all_matches)
+            resp = requests.post(f"{CLIP_API_URL}/clip-match", json=payload, timeout=60).json()
+            top_matches = resp.get("matches", [])
         except Exception as e:
             print(f"⚠️ Lỗi khi gọi CLIP API (Image): {e}")
-            all_matches = []
+            top_matches = []
 
-        # gom tất cả matches từ mọi crop
-        all_filtered = all_matches
-
-        if all_filtered:
-            combined_reply = generate_llm_summary_all_books(all_filtered, get_session_history())
-            add_to_history("assistant", combined_reply)
-
+        if top_matches:
+            best_match = top_matches[0]
+            update_session_if_new_book(best_match)
+            add_to_history("user", f"[IMAGE] {text_query if text_query else '(Tìm sách qua ảnh)'}")
+            reply = generate_llm_reply_for_book("general_info", best_match, get_session_history())
+            add_to_history("assistant", reply)
             return jsonify({
-                "ok": True,
-                "reply": combined_reply,
-                "covers": [m.get("cover") for m in all_filtered if m.get("cover")],
-                "books": [make_json_safe(m) for m in all_filtered],
-                "suggested": all_filtered,
-                "total_price": sum(m.get("price", 0) for m in all_filtered)
+                "ok": True, "reply": reply,
+                "cover": best_match.get("cover"),
+                "covers": [best_match.get("cover")] if best_match.get("cover") else [],
+                "book": make_json_safe(best_match), "suggested": [best_match]
             })
+    # if pil_img:
+    #     try:
+    #         payload = {"books": books}
+    #         buffered = io.BytesIO()
+    #         pil_img.save(buffered, format="JPEG")
+    #         img_b64 = "data:image/jpeg;base64," + base64.b64encode(buffered.getvalue()).decode()
+    #         payload["image"] = img_b64
+    #         if text_query:
+    #             payload["query"] = text_query
+    #         resp = requests.post(f"{CLIP_API_URL}/clip-match-book", json=payload, timeout=60).json()
+    #         all_matches = resp.get("matches", [])   # list các crop
+    #         print(all_matches)
+    #     except Exception as e:
+    #         print(f"⚠️ Lỗi khi gọi CLIP API (Image): {e}")
+    #         all_matches = []
+
+    #     # gom tất cả matches từ mọi crop
+    #     all_filtered = all_matches
+
+    #     if all_filtered:
+    #         combined_reply = generate_llm_summary_all_books(all_filtered, get_session_history())
+    #         add_to_history("assistant", combined_reply)
+
+    #         return jsonify({
+    #             "ok": True,
+    #             "reply": combined_reply,
+    #             "covers": [m.get("cover") for m in all_filtered if m.get("cover")],
+    #             "books": [make_json_safe(m) for m in all_filtered],
+    #             "suggested": all_filtered,
+    #             "total_price": sum(m.get("price", 0) for m in all_filtered)
+    #         })
         else:
-            reply = "Không nhận diện được sách từ ảnh."
+            reply = "Xin lỗi bạn! Hiện tại tụi mình hong có cuốn nì nhos."
             add_to_history("user", f"[IMAGE] {text_query if text_query else '(Tìm sách qua ảnh)'}")
             add_to_history("assistant", reply)
             return jsonify({"ok": False, "reply": reply})
