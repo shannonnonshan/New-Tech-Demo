@@ -104,7 +104,8 @@
       </div>
       <div class="form-group">
         <label for="new-cover">Book Cover</label>
-        <input type="file" id="new-cover" name="new-cover" accept="image/*">
+        <input type="file" id="new-cover" name="new-cover-file" accept="image/*">
+        <input type="text" id="new-cover-url" name="new-cover-url" placeholder="Nhập URL ảnh">
         <div class="cover-preview">
           <img id="cover-preview-img" src="" alt="Preview" style="display:none;">
         </div>
@@ -122,83 +123,93 @@
   <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 
   <script>
- async function loadBooks() {
-  try {
-    const res = await fetch("/api/books");
-    const data = await res.json();
+  async function loadBooks() {
+    try {
+      const res = await fetch("/api/books");
+      const data = await res.json();
 
-    if (data.ok) {
-      const container = document.getElementById("book-list");
-      container.innerHTML = ""; // clear
+      if (data.ok) {
+        const container = document.getElementById("book-list");
+        container.innerHTML = ""; // clear
 
-      data.books.slice(0, 12).forEach(book => {
-        const card = document.createElement("div");
-        card.className = "book-card";
+        data.books.slice(0, 12).forEach(book => {
+          const card = document.createElement("div");
+          card.className = "book-card";
 
-        card.innerHTML = `
-          <img src="${book.cover}" alt="${book.title}">
-          <h3>${book.title}</h3>
-          <p>${book.author}</p>
-          <span class="price">${book.price} VND</span>
-          <button class="delete-btn" data-id="${book._id}">🗑️ Delete</button>
-        `;
+          card.innerHTML = `
+            <img src="${book.cover}" alt="${book.title}">
+            <h3>${book.title}</h3>
+            <p>${book.author}</p>
+            <span class="price">${book.price} VND</span>
+            <button class="delete-btn" data-id="${book._id}">🗑️ Delete</button>
+          `;
 
-        container.appendChild(card);
-      });
-
-      // Gắn event click cho nút delete
-      document.querySelectorAll(".delete-btn").forEach(btn => {
-        btn.addEventListener("click", async (e) => {
-          const id = e.target.getAttribute("data-id");
-          if (!confirm("Bạn có chắc muốn xóa sách này?")) return;
-
-          const res = await fetch("/api/delete-book", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id })
-          });
-
-          const result = await res.json();
-          alert(result.message);
-          if (result.ok) loadBooks(); // refresh list
+          container.appendChild(card);
         });
-      });
+
+        // Gắn event click cho nút delete
+        document.querySelectorAll(".delete-btn").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            const id = e.target.getAttribute("data-id");
+            if (!confirm("Bạn có chắc muốn xóa sách này?")) return;
+
+            const res = await fetch("/api/delete-book", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id })
+            });
+
+            const result = await res.json();
+            alert(result.message);
+            if (result.ok) loadBooks(); // refresh list
+          });
+        });
+      }
+    } catch (err) {
+      console.error("❌ Error loading books:", err);
     }
-  } catch (err) {
-    console.error("❌ Error loading books:", err);
   }
-}
-window.onload = loadBooks;
+  window.onload = loadBooks;
   </script>
-<script>
-  async function loadRecommended() {
-  try {
-    const res = await fetch("/api/recommended");
-    const data = await res.json();
+  <script>
+    async function loadRecommended() {
+      try {
+        const res = await fetch("/api/recommended");
+        const data = await res.json();
 
-    if (!data.ok) return;
-    const recList = document.getElementById("recommended-list");
-    recList.innerHTML = "";
+        if (!data.ok) return;
+        const recList = document.getElementById("recommended-list");
+        recList.innerHTML = "";
 
-    data.books.forEach(book => {
-      const div = document.createElement("div");
-      div.className = "thumb-card";
-      div.onclick = () => openBookModal(book.title, book.author, book.price, book.cover);
+        data.books.forEach(book => {
+          const div = document.createElement("div");
+          div.className = "thumb-card";
+          div.onclick = () => openBookModal(book.title, book.author, book.price, book.cover);
 
-      div.innerHTML = `
-        <img src="${book.cover}" alt="${book.title}">
-      `;
-      recList.appendChild(div);
-    });
-  } catch (err) {
-    console.error("Error loading recommended:", err);
-  }
-}
+          div.innerHTML = `
+            <img src="${book.cover}" alt="${book.title}">
+          `;
+          recList.appendChild(div);
+        });
+      } catch (err) {
+        console.error("Error loading recommended:", err);
+      }
+    }
 
-document.addEventListener("DOMContentLoaded", loadRecommended);
+    document.addEventListener("DOMContentLoaded", loadRecommended);
 
-</script>
-
-
+  </script>
+  <script>
+      function openBookModal(title, author, price, cover) {
+        document.getElementById("modal-title").textContent = title;
+        document.getElementById("modal-author").textContent = author;
+        document.getElementById("modal-price").textContent = price + " VND";
+        document.getElementById("modal-cover").src = cover;
+        document.getElementById("book-modal").style.display = "flex";
+      }
+      function closeBookModal() {
+        document.getElementById("book-modal").style.display = "none";
+      }
+  </script>
 </body>
 </html>

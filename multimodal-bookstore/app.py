@@ -2,6 +2,7 @@ import os
 import io
 import base64
 import random
+import re
 import uuid
 import requests
 from PIL import Image
@@ -12,6 +13,7 @@ import secrets
 from datetime import timedelta
 from bson import ObjectId
 from difflib import get_close_matches
+from werkzeug.utils import secure_filename
 
 # ================== CONFIG ==================
 load_dotenv()
@@ -26,6 +28,9 @@ app.config["MONGO_URI"] = MONGO_URI
 app.config["SESSION_PERMANENT"] = False
 mongo = PyMongo(app)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "static", "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ================== UTILS ==================
 def image_from_base64(data_url):
     """Giải mã chuỗi base64 thành đối tượng PIL Image."""
@@ -200,6 +205,45 @@ def generate_llm_reply_for_book(intent, book_data, session_history):
         else:
             # Fallback cho general_info
             return f"Có phải bạn đang tìm cuốn sách tựa đề '{book_title}' của {book_author}? Bạn có muốn mua không?"
+def generate_llm_summary_all_books(all_books, session_history):
+    """
+    Sinh phản hồi thân thiện cho nhiều sách cùng lúc.
+    """
+    # Chuẩn bị context
+    book_infos = []
+    total_price = 0
+    for match in all_books:
+        info = f"- {match.get('title')} của {match.get('author')} (giá: {match.get('price')} VND)"
+        book_infos.append(info)
+        total_price += match.get("price", 0)
+
+    books_context = "\n".join(book_infos)
+    summary_prompt = f"""
+    Tôi có danh sách sách sau đây:
+
+    {books_context}
+
+    Tổng giá của tất cả sách là {total_price} VND.
+
+    Hãy viết một đoạn trả lời tự nhiên, thân thiện như con người, 
+    giới thiệu các cuốn sách này, nhấn mạnh tổng giá,
+    và gợi ý khách xem có muốn chọn mua cuốn nào không.
+    """
+
+    # Gọi LLM
+    system_prompt = session_history[0]["content"] if session_history else "Bạn là nhân viên tư vấn sách thân thiện."
+    llm_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": summary_prompt}
+    ]
+
+    try:
+        response = call_openrouter(llm_messages)
+        return response["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"⚠️ Lỗi khi gọi OpenRouter/LLM: {e}")
+        # fallback: tự ghép chuỗi
+        return f"Tìm thấy {len(all_books)} cuốn sách:\n{books_context}\n👉 Tổng giá: {total_price} VND."
 
 # ================== PUSH BOOKS TO CLIP ==================
 def push_books_to_clip():
@@ -423,17 +467,38 @@ def api_query():
             if top_matches:
                 best_match = top_matches[0]
                 update_session_if_new_book(best_match)
+
+                # Lưu danh sách gợi ý vào session
                 session_data["last_suggested"] = [make_json_safe(b) for b in top_matches]
                 save_session_data(session_data)
-                book_list_str = "\n".join([f"- **{b['title']}** ({b['author']})" for b in top_matches])
-                reply = f"Dựa trên yêu cầu tìm sách bìa **{detected_color}**, BooksLand gợi ý:\n{book_list_str}\n\nBạn muốn mình giới thiệu chi tiết cuốn nào không?"
+
+                # Danh sách sách kèm giá
+                book_list_str = "\n".join([
+                    f"- **{b['title']}** ({b['author']}) → {b.get('price', 0):,}₫"
+                    for b in top_matches
+                ])
+
+                # Tính tổng giá
+                total_price = sum(b.get("price", 0) for b in top_matches)
+
+                reply = (
+                    f"Dựa trên yêu cầu tìm sách bìa **{detected_color}**, BooksLand gợi ý:\n"
+                    f"{book_list_str}\n"
+                    f"👉 **Tổng cộng: {total_price:,}₫**\n\n"
+                    "Bạn muốn mình giới thiệu chi tiết cuốn nào không?"
+                )
+
                 add_to_history("assistant", reply)
+
                 return jsonify({
-                    "ok": True, "reply": reply,
+                    "ok": True,
+                    "reply": reply,
                     "cover": best_match.get("cover"),
                     "covers": [b.get("cover") for b in top_matches if b.get("cover")],
                     "book": make_json_safe(best_match),
-                    "suggested": top_matches, "detected_color": detected_color
+                    "suggested": top_matches,
+                    "detected_color": detected_color,
+                    "total_price": total_price
                 })
             else:
                 reply = f"Xin lỗi, chưa tìm thấy sách bìa **{detected_color}**."
@@ -498,29 +563,34 @@ def api_query():
             payload["image"] = img_b64
             if text_query:
                 payload["query"] = text_query
-            resp = requests.post(f"{CLIP_API_URL}/clip-match", json=payload, timeout=60).json()
-            top_matches = resp.get("matches", [])
+            resp = requests.post(f"{CLIP_API_URL}/clip-match-book", json=payload, timeout=60).json()
+            all_matches = resp.get("matches", [])   # list các crop
+            print(all_matches)
         except Exception as e:
             print(f"⚠️ Lỗi khi gọi CLIP API (Image): {e}")
-            top_matches = []
+            all_matches = []
 
-        if top_matches:
-            best_match = top_matches[0]
-            update_session_if_new_book(best_match)
-            add_to_history("user", f"[IMAGE] {text_query if text_query else '(Tìm sách qua ảnh)'}")
-            reply = generate_llm_reply_for_book("general_info", best_match, get_session_history())
-            add_to_history("assistant", reply)
+        # gom tất cả matches từ mọi crop
+        all_filtered = all_matches
+
+        if all_filtered:
+            combined_reply = generate_llm_summary_all_books(all_filtered, get_session_history())
+            add_to_history("assistant", combined_reply)
+
             return jsonify({
-                "ok": True, "reply": reply,
-                "cover": best_match.get("cover"),
-                "covers": [best_match.get("cover")] if best_match.get("cover") else [],
-                "book": make_json_safe(best_match), "suggested": [best_match]
+                "ok": True,
+                "reply": combined_reply,
+                "covers": [m.get("cover") for m in all_filtered if m.get("cover")],
+                "books": [make_json_safe(m) for m in all_filtered],
+                "suggested": all_filtered,
+                "total_price": sum(m.get("price", 0) for m in all_filtered)
             })
         else:
             reply = "Không nhận diện được sách từ ảnh."
             add_to_history("user", f"[IMAGE] {text_query if text_query else '(Tìm sách qua ảnh)'}")
             add_to_history("assistant", reply)
             return jsonify({"ok": False, "reply": reply})
+
 
     # ================== 8. Fallback ==================
     reply = "Không hiểu yêu cầu, vui lòng thử lại với text hoặc ảnh."
@@ -560,6 +630,32 @@ def get_books():
     for book in books:
         book["_id"] = str(book["_id"])
     return jsonify({"ok": True, "books": [make_json_safe(book) for book in books]})
+# -------- Add book --------
+@app.route("/api/add-book", methods=["POST"])
+def api_add_book():
+    title = request.form.get("new-title")
+    author = request.form.get("new-author")
+    price = request.form.get("new-price")
+    cover = request.files.get("new-cover-file")
+    cover_url = request.form.get("new-cover-url")
+    print(request.form)
+    if not title or not author:
+        return jsonify({"ok": False, "message": "❌ Thiếu tiêu đề hoặc tác giả."}), 400
+
+    if cover:
+        filename = secure_filename(cover.filename)
+        save_path = os.path.join(UPLOAD_FOLDER, filename)
+        cover.save(save_path)
+        cover_url = "/static/uploads/" + filename
+
+    mongo.db.books.insert_one({
+        "title": title,
+        "author": author,
+        "price": int(price) if price and price.isdigit() else 0,
+        "cover": cover_url
+    })
+
+    return jsonify({"ok": True, "message": "✅ Book added to MongoDB"})
 
 @app.route("/api/recommended", methods=["GET"])
 def get_recommended():
